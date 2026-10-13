@@ -1,0 +1,660 @@
+//! YouTube Music: search, your library, and turning a song into a stream mpv can play.
+//!
+//! There's no official API. Search and library come from the same web API the YouTube Music
+//! site uses ("InnerTube"). Streams come from `yt-dlp`, which keeps up with YouTube's changes.
+//!
+//! Signing in borrows your browser's YouTube login: `yt-dlp` reads the browser's cookies and
+//! writes the YouTube ones to `~/.config/omaestro/ytm-cookies.txt` (readable only by you).
+//! OMAESTRO never sees your password. YouTube may ask for a fresh login now and then; connect
+//! again in Settings. The yt-dlp wiki warns that heavy use with cookies could get an account
+//! flagged, so OMAESTRO only makes the requests you ask for.
+
+use crate::library::{Source, Track};
+use crate::secrets;
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+const FILE: &str = "youtube.json";
+const COOKIES: &str = "ytm-cookies.txt";
+const ORIGIN: &str = "https://music.youtube.com";
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+                          Chrome/141.0.0.0 Safari/537.36";
+/// Search filter: songs only.
+const SONGS: &str = "EgWKAQIIAWoMEA4QChADEAQQCRAF";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Account {
+    /// The browser the login comes from, as yt-dlp names it.
+    pub browser: String,
+    pub user: String,
+}
+
+pub fn account() -> Option<Account> {
+    secrets::load(FILE)
+}
+
+pub fn sign_out() {
+    secrets::forget(FILE);
+    secrets::forget(COOKIES);
+}
+
+/// The browsers on this computer that yt-dlp could read a login from.
+pub fn installed_browsers() -> Vec<&'static str> {
+    let programs: &[(&str, &[&str])] = &[
+        ("chromium", &["chromium"]),
+        ("chrome", &["google-chrome-stable", "google-chrome"]),
+        ("brave", &["brave", "brave-browser"]),
+        ("firefox", &["firefox"]),
+        ("vivaldi", &["vivaldi-stable", "vivaldi"]),
+        ("edge", &["microsoft-edge-stable"]),
+        ("opera", &["opera"]),
+    ];
+    programs
+        .iter()
+        .filter(|(_, bins)| bins.iter().any(|b| which(b)))
+        .map(|(name, _)| *name)
+        .collect()
+}
+
+fn which(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+/// Copies the YouTube login from `browser` and checks it works. Returns the account name.
+/// Takes a few seconds (yt-dlp may unlock the browser's keyring).
+pub fn connect(browser: &str) -> Result<String> {
+    let path = secrets::path(COOKIES);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("new");
+    let _ = std::fs::remove_file(&tmp);
+    // With no URL yt-dlp writes the cookie file and then complains there's nothing to do.
+    let out = Command::new("yt-dlp")
+        .args([
+            "--ignore-config",
+            "--cookies-from-browser",
+            browser,
+            "--cookies",
+        ])
+        .arg(&tmp)
+        .stdin(Stdio::null())
+        .output()
+        .context("running yt-dlp (is it installed?)")?;
+    if !tmp.is_file() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let last = err
+            .lines()
+            .rev()
+            .find(|l| l.contains("ERROR"))
+            .unwrap_or("no cookie file");
+        bail!("Couldn't read {browser}'s cookies: {last}");
+    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    let cookies = Cookies::parse(&std::fs::read_to_string(&tmp)?);
+    if !cookies.signed_in() {
+        let _ = std::fs::remove_file(&tmp);
+        bail!("{browser} isn't signed in to YouTube. Sign in at music.youtube.com there first.");
+    }
+    std::fs::rename(&tmp, &path)?;
+    let mut client = Client::new()?;
+    let user = client
+        .account_name()
+        .unwrap_or_else(|_| "YouTube Music".into());
+    secrets::save(
+        FILE,
+        &Account {
+            browser: browser.to_string(),
+            user: user.clone(),
+        },
+    )?;
+    Ok(user)
+}
+
+/// Cookies from a Netscape-format cookie file, the ones YouTube Music needs.
+#[derive(Debug, Default, Clone)]
+pub struct Cookies(Vec<(String, String)>);
+
+impl Cookies {
+    pub fn parse(text: &str) -> Cookies {
+        let now = secrets::now_secs();
+        let mut out = Vec::new();
+        for line in text.lines() {
+            // "#HttpOnly_" lines are real cookies; other "#" lines are comments.
+            let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+            if line.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 7 {
+                continue;
+            }
+            let domain = fields[0].trim_start_matches('.');
+            if !(domain == "youtube.com" || domain.ends_with(".youtube.com")) {
+                continue;
+            }
+            let expires: u64 = fields[4].parse().unwrap_or(0);
+            if expires != 0 && expires < now {
+                continue;
+            }
+            out.push((fields[5].to_string(), fields[6].to_string()));
+        }
+        Cookies(out)
+    }
+
+    fn get(&self, name: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    pub fn signed_in(&self) -> bool {
+        self.get("LOGIN_INFO").is_some()
+            && ["SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID"]
+                .iter()
+                .any(|n| self.get(n).is_some())
+    }
+
+    fn header(&self) -> String {
+        let mut parts: Vec<String> = self.0.iter().map(|(n, v)| format!("{n}={v}")).collect();
+        parts.push("SOCS=CAI".into());
+        parts.join("; ")
+    }
+
+    /// The Authorization header YouTube expects from a signed-in browser:
+    /// "SAPISIDHASH <time>_<sha1(time + ' ' + SAPISID + ' ' + origin)>" and its two siblings.
+    fn authorization(&self, now: u64) -> Option<String> {
+        let hash = |cookie: &str| {
+            let input = format!("{now} {cookie} {ORIGIN}");
+            format!("{now}_{}", sha1_smol::Sha1::from(input).digest())
+        };
+        let sapisid = self.get("SAPISID").or(self.get("__Secure-3PAPISID"))?;
+        let mut parts = vec![format!("SAPISIDHASH {}", hash(sapisid))];
+        if let Some(c) = self.get("__Secure-1PAPISID") {
+            parts.push(format!("SAPISID1PHASH {}", hash(c)));
+        }
+        if let Some(c) = self.get("__Secure-3PAPISID") {
+            parts.push(format!("SAPISID3PHASH {}", hash(c)));
+        }
+        Some(parts.join(" "))
+    }
+}
+
+/// Talks to YouTube Music's web API.
+pub struct Client {
+    http: ureq::Agent,
+    version: String,
+    visitor: String,
+    cookies: Option<Cookies>,
+}
+
+impl Client {
+    /// Reads the site's current API version (it changes every few days) and, if signed in,
+    /// the saved cookies.
+    pub fn new() -> Result<Client> {
+        let http: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut res = http
+            .get(&format!("{ORIGIN}/"))
+            .header("User-Agent", USER_AGENT)
+            .header("Cookie", "SOCS=CAI")
+            .call()
+            .context("reaching YouTube Music")?;
+        let page = res
+            .body_mut()
+            .with_config()
+            .limit(8 * 1024 * 1024)
+            .read_to_string()?;
+        let find = |key: &str| {
+            let start = page.find(&format!("\"{key}\":\""))? + key.len() + 4;
+            let end = page[start..].find('"')? + start;
+            Some(page[start..end].to_string())
+        };
+        let cookies = std::fs::read_to_string(secrets::path(COOKIES))
+            .ok()
+            .map(|text| Cookies::parse(&text))
+            .filter(Cookies::signed_in);
+        Ok(Client {
+            version: find("INNERTUBE_CLIENT_VERSION")
+                .context("YouTube Music's page has changed")?,
+            visitor: find("VISITOR_DATA").unwrap_or_default(),
+            cookies,
+            http,
+        })
+    }
+
+    pub fn signed_in(&self) -> bool {
+        self.cookies.is_some()
+    }
+
+    fn post(&self, endpoint: &str, body: Value) -> Result<Value> {
+        let mut payload = json!({
+            "context": {"client": {"clientName": "WEB_REMIX", "clientVersion": self.version,
+                                   "hl": "en", "gl": "US"}, "user": {}}
+        });
+        if let (Some(p), Some(b)) = (payload.as_object_mut(), body.as_object()) {
+            p.extend(b.clone());
+        }
+        let mut req = self
+            .http
+            .post(&format!(
+                "{ORIGIN}/youtubei/v1/{endpoint}?prettyPrint=false"
+            ))
+            .header("User-Agent", USER_AGENT)
+            .header("Origin", ORIGIN)
+            .header("X-Origin", ORIGIN)
+            .header("Referer", &format!("{ORIGIN}/"))
+            .header("X-Goog-Visitor-Id", &self.visitor)
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", &self.version);
+        match &self.cookies {
+            Some(c) => {
+                req = req
+                    .header("Cookie", &c.header())
+                    .header("X-Goog-AuthUser", "0");
+                if let Some(auth) = c.authorization(secrets::now_secs()) {
+                    req = req.header("Authorization", &auth);
+                }
+            }
+            None => req = req.header("Cookie", "SOCS=CAI"),
+        }
+        let mut res = req.send_json(&payload).context("reaching YouTube Music")?;
+        match res.status().as_u16() {
+            200 => Ok(res
+                .body_mut()
+                .with_config()
+                .limit(16 * 1024 * 1024)
+                .read_json()?),
+            401 | 403 => bail!("YouTube Music didn't accept the login; connect again in Settings"),
+            status => bail!("YouTube Music replied {status}"),
+        }
+    }
+
+    /// Songs matching the words, best first.
+    pub fn search(&self, query: &str) -> Result<Vec<Track>> {
+        let body = self.post("search", json!({"query": query, "params": SONGS}))?;
+        Ok(search_songs(&body))
+    }
+
+    /// "Connected as …".
+    pub fn account_name(&mut self) -> Result<String> {
+        let body = self.post("account/account_menu", json!({}))?;
+        let header = at(
+            &body,
+            "actions.0.openPopupAction.popup.multiPageMenuRenderer.header.activeAccountHeaderRenderer",
+        );
+        at(header, "accountName.runs.0.text")
+            .as_str()
+            .map(str::to_string)
+            .context("not signed in")
+    }
+
+    /// Your library's playlists, starting with Liked Music.
+    pub fn playlists(&self) -> Result<Vec<Playlist>> {
+        if !self.signed_in() {
+            bail!("Connect YouTube Music in Settings to see your playlists");
+        }
+        let body = self.post("browse", json!({"browseId": "FEmusic_liked_playlists"}))?;
+        let mut out = vec![Playlist {
+            id: "VLLM".into(),
+            name: "Liked Music".into(),
+        }];
+        let sections = at(
+            &body,
+            "contents.singleColumnBrowseResultsRenderer.tabs.0.tabRenderer.content.sectionListRenderer.contents",
+        );
+        for section in list(sections) {
+            let grid = at(section, "itemSectionRenderer.contents.0.gridRenderer.items");
+            for item in list(grid) {
+                let item = &item["musicTwoRowItemRenderer"];
+                let run = at(item, "title.runs.0");
+                let id = at(run, "navigationEndpoint.browseEndpoint.browseId")
+                    .as_str()
+                    .unwrap_or("");
+                if id.starts_with("VL") && id != "VLLM" {
+                    out.push(Playlist {
+                        id: id.to_string(),
+                        name: run["text"].as_str().unwrap_or_default().to_string(),
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// A playlist's songs (follows "load more" up to `limit` songs).
+    pub fn playlist_tracks(&self, id: &str, limit: usize) -> Result<Vec<Track>> {
+        let body = self.post("browse", json!({"browseId": id}))?;
+        let shelf = at(
+            &body,
+            "contents.twoColumnBrowseResultsRenderer.secondaryContents.sectionListRenderer.contents.0.musicPlaylistShelfRenderer.contents",
+        );
+        let mut out = Vec::new();
+        let mut items = list(shelf).cloned().collect::<Vec<_>>();
+        loop {
+            let mut next = None;
+            for item in &items {
+                if let Some(t) = playlist_track(&item["musicResponsiveListItemRenderer"]) {
+                    out.push(t);
+                }
+                if let Some(token) = continuation(item) {
+                    next = Some(token);
+                }
+            }
+            let Some(token) = next.filter(|_| out.len() < limit) else {
+                break;
+            };
+            let more = self.post("browse", json!({"continuation": token}))?;
+            items = list(at(
+                &more,
+                "onResponseReceivedActions.0.appendContinuationItemsAction.continuationItems",
+            ))
+            .cloned()
+            .collect();
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+}
+
+/// A YouTube Music playlist, for the Open list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+}
+
+/// Walks a dotted path through JSON: "a.0.b" is `v["a"][0]["b"]`. Missing parts give Null.
+fn at<'a>(v: &'a Value, path: &str) -> &'a Value {
+    path.split('.')
+        .fold(v, |v, key| match key.parse::<usize>() {
+            Ok(i) => v.get(i).unwrap_or(&Value::Null),
+            Err(_) => v.get(key).unwrap_or(&Value::Null),
+        })
+}
+
+fn list(v: &Value) -> impl Iterator<Item = &Value> {
+    v.as_array().into_iter().flatten()
+}
+
+fn text_of(column: &Value) -> Vec<&Value> {
+    list(at(
+        column,
+        "musicResponsiveListItemFlexColumnRenderer.text.runs",
+    ))
+    .collect()
+}
+
+/// "3:38" or "1:02:05" → milliseconds.
+fn duration_ms(s: &str) -> Option<i64> {
+    let parts: Vec<i64> = s
+        .split(':')
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
+    if parts.len() < 2 || parts.len() > 3 {
+        return None;
+    }
+    Some(parts.iter().fold(0, |acc, p| acc * 60 + p) * 1000)
+}
+
+fn largest_thumbnail(v: &Value) -> String {
+    list(at(
+        v,
+        "thumbnail.musicThumbnailRenderer.thumbnail.thumbnails",
+    ))
+    .filter_map(|t| t["url"].as_str())
+    .last()
+    .unwrap_or_default()
+    .to_string()
+}
+
+/// Fills artist, album, year and duration from a row of runs like "Artist • Album • 3:38".
+/// Runs are told apart by what they link to and look like, not by position.
+fn read_runs(runs: &[&Value], t: &mut Track) {
+    let mut artists = Vec::new();
+    for run in runs {
+        let text = run["text"].as_str().unwrap_or_default();
+        let browse = at(run, "navigationEndpoint.browseEndpoint.browseId").as_str();
+        match browse {
+            Some(id) if id.starts_with("MPRE") => t.album = text.to_string(),
+            Some(_) => artists.push(text),
+            None if text.trim() == "•" || text.trim().is_empty() => {}
+            None if duration_ms(text).is_some() => t.duration_ms = duration_ms(text).unwrap_or(0),
+            None if text.len() == 4 && text.chars().all(|c| c.is_ascii_digit()) => {
+                t.year = text.parse().ok()
+            }
+            None if matches!(text, "Song" | "Video" | "Album" | "Single" | "EP") => {}
+            None => artists.push(text),
+        }
+    }
+    t.artist = artists.join(", ");
+    t.album_artist = artists.first().map(|a| a.to_string()).unwrap_or_default();
+}
+
+/// Songs from a search reply.
+fn search_songs(body: &Value) -> Vec<Track> {
+    let sections = at(
+        body,
+        "contents.tabbedSearchResultsRenderer.tabs.0.tabRenderer.content.sectionListRenderer.contents",
+    );
+    let Some(shelf) = list(sections).find(|s| s.get("musicShelfRenderer").is_some()) else {
+        return Vec::new();
+    };
+    list(&shelf["musicShelfRenderer"]["contents"])
+        .filter_map(|item| {
+            let it = &item["musicResponsiveListItemRenderer"];
+            let columns: Vec<&Value> = list(&it["flexColumns"]).collect();
+            let title = text_of(columns.first()?);
+            let id = at(
+                it,
+                "overlay.musicItemThumbnailOverlayRenderer.content.musicPlayButtonRenderer.playNavigationEndpoint.watchEndpoint.videoId",
+            )
+            .as_str()
+            .or(at(title.first()?, "navigationEndpoint.watchEndpoint.videoId").as_str())?;
+            let mut t = Track {
+                source: Source::YouTube,
+                uri: id.to_string(),
+                title: title.first()?["text"].as_str()?.to_string(),
+                art_url: largest_thumbnail(it),
+                ..Track::default()
+            };
+            if let Some(details) = columns.get(1) {
+                read_runs(&text_of(details), &mut t);
+            }
+            Some(t)
+        })
+        .collect()
+}
+
+/// A song row from a playlist page.
+fn playlist_track(it: &Value) -> Option<Track> {
+    let id = at(it, "playlistItemData.videoId").as_str()?;
+    let columns: Vec<&Value> = list(&it["flexColumns"]).collect();
+    let mut t = Track {
+        source: Source::YouTube,
+        uri: id.to_string(),
+        title: text_of(columns.first()?).first()?["text"]
+            .as_str()?
+            .to_string(),
+        art_url: largest_thumbnail(it),
+        ..Track::default()
+    };
+    let mut runs: Vec<&Value> = Vec::new();
+    for column in columns.iter().skip(1) {
+        runs.extend(text_of(column));
+    }
+    read_runs(&runs, &mut t);
+    let fixed = at(
+        it,
+        "fixedColumns.0.musicResponsiveListItemFixedColumnRenderer.text",
+    );
+    let length = fixed["simpleText"]
+        .as_str()
+        .or(at(fixed, "runs.0.text").as_str());
+    if let Some(ms) = length.and_then(duration_ms) {
+        t.duration_ms = ms;
+    }
+    Some(t)
+}
+
+/// The "load more" token at the end of a playlist page.
+fn continuation(item: &Value) -> Option<String> {
+    let endpoint = &item["continuationItemRenderer"]["continuationEndpoint"];
+    if let Some(token) = at(endpoint, "continuationCommand.token").as_str() {
+        return Some(token.to_string());
+    }
+    list(at(endpoint, "commandExecutorCommand.commands"))
+        .find_map(|c| at(c, "continuationCommand.token").as_str())
+        .map(str::to_string)
+}
+
+/// A song ready for mpv: a direct audio address, good for about six hours.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stream {
+    pub url: String,
+    pub user_agent: String,
+    pub headers: Vec<(String, String)>,
+    /// YouTube sometimes holds a stream back while an ad would play; not before this time
+    /// (seconds since 1970).
+    pub available_at: u64,
+    pub codec: String,
+    pub sample_rate: Option<u32>,
+    pub bitrate: Option<u32>,
+}
+
+/// Asks yt-dlp for the best audio of a song, with your login when connected (Premium quality).
+pub fn resolve(video_id: &str) -> Result<Stream> {
+    let mut cmd = Command::new("yt-dlp");
+    cmd.args(["--ignore-config", "-j", "-f", "bestaudio", "--no-warnings"]);
+    if let Some(account) = account() {
+        cmd.args(["--cookies-from-browser", &account.browser]);
+    }
+    let out = cmd
+        .arg(format!("{ORIGIN}/watch?v={video_id}"))
+        .stdin(Stdio::null())
+        .output()
+        .context("running yt-dlp")?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let last = err
+            .lines()
+            .rev()
+            .find(|l| l.contains("ERROR"))
+            .unwrap_or("unknown error");
+        bail!(
+            "YouTube wouldn't play this one: {}",
+            last.trim_start_matches("ERROR: ")
+        );
+    }
+    let v: Value = serde_json::from_slice(&out.stdout).context("reading yt-dlp's answer")?;
+    stream_from(&v)
+}
+
+fn stream_from(v: &Value) -> Result<Stream> {
+    let headers = v["http_headers"].as_object().cloned().unwrap_or_default();
+    let header_list: Vec<(String, String)> = headers
+        .iter()
+        .filter(|(k, _)| *k != "User-Agent")
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+        .collect();
+    Ok(Stream {
+        url: v["url"]
+            .as_str()
+            .context("yt-dlp gave no stream address")?
+            .to_string(),
+        user_agent: headers
+            .get("User-Agent")
+            .and_then(Value::as_str)
+            .unwrap_or(USER_AGENT)
+            .to_string(),
+        headers: header_list,
+        available_at: v["available_at"].as_u64().unwrap_or(0),
+        codec: v["acodec"].as_str().unwrap_or_default().to_string(),
+        sample_rate: v["asr"].as_u64().map(|r| r as u32),
+        bitrate: v["abr"].as_f64().map(|b| b.round() as u32),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_songs_from_a_real_search_reply() {
+        // A trimmed copy of a live, signed-out search for "black keys" (2026-10-13).
+        let body: Value = serde_json::from_str(include_str!("test-search-songs.json")).unwrap();
+        let songs = search_songs(&body);
+        assert_eq!(songs.len(), 3);
+        let first = &songs[0];
+        assert_eq!(first.source, Source::YouTube);
+        assert_eq!(first.uri.len(), 11, "a video id: {}", first.uri);
+        assert_eq!(first.artist, "The Black Keys");
+        assert_eq!(first.album, "No Rain, No Flowers");
+        assert_eq!(first.duration_ms, 218_000);
+        assert!(first.art_url.starts_with("https://"));
+    }
+
+    #[test]
+    fn cookie_files_and_the_login_header() {
+        let file = "# Netscape HTTP Cookie File\n\
+            .youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tabc/def\n\
+            #HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tlogin\n\
+            .youtube.com\tTRUE\t/\tTRUE\t1\tOLD\texpired\n\
+            .google.com\tTRUE\t/\tTRUE\t0\tSID\tnot-ours\n\
+            broken line\n";
+        let cookies = Cookies::parse(file);
+        assert!(cookies.signed_in());
+        assert_eq!(
+            cookies.header(),
+            "SAPISID=abc/def; LOGIN_INFO=login; SOCS=CAI"
+        );
+        // sha1("1700000000 abc/def https://music.youtube.com")
+        let auth = cookies.authorization(1_700_000_000).unwrap();
+        let expected =
+            sha1_smol::Sha1::from("1700000000 abc/def https://music.youtube.com").digest();
+        assert_eq!(auth, format!("SAPISIDHASH 1700000000_{expected}"));
+        assert!(!Cookies::parse("").signed_in());
+    }
+
+    /// One live, signed-out search: `cargo test live_youtube -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_youtube_search() {
+        let client = Client::new().unwrap();
+        assert!(!client.version.is_empty());
+        let songs = client.search("tighten up black keys").unwrap();
+        for t in songs.iter().take(5) {
+            println!(
+                "{} | {} | {} | {} ms | {}",
+                t.uri, t.title, t.artist, t.duration_ms, t.album
+            );
+        }
+        assert!(songs.iter().any(|t| t.title.contains("Tighten Up")));
+    }
+
+    #[test]
+    fn reads_durations_and_stream_details() {
+        assert_eq!(duration_ms("3:38"), Some(218_000));
+        assert_eq!(duration_ms("1:02:05"), Some(3_725_000));
+        assert_eq!(duration_ms("2010"), None);
+        let v = serde_json::json!({"url": "https://rr1.googlevideo.com/x", "acodec": "opus", "asr": 48000,
+            "abr": 122.6, "available_at": 1791927356u64,
+            "http_headers": {"User-Agent": "UA", "Accept": "*/*"}});
+        let s = stream_from(&v).unwrap();
+        assert_eq!(
+            (s.user_agent.as_str(), s.codec.as_str(), s.bitrate),
+            ("UA", "opus", Some(123))
+        );
+        assert_eq!(s.headers, vec![("Accept".to_string(), "*/*".to_string())]);
+    }
+}

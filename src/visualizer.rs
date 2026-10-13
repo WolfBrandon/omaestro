@@ -1,0 +1,251 @@
+//! The visualizer: listens to what OMAESTRO plays and splits it into frequency bands for the
+//! VISUALIZER pane's bars.
+//!
+//! Sound is captured with `pw-record` (part of PipeWire) and analysed here with an FFT; nothing
+//! is ever written to disk. It listens to mpv's own output only (the "omaestro" stream), or for
+//! Spotify to the monitor of the device it plays on. `node.dont-fallback` makes sure it never
+//! falls back to a microphone when that target isn't there; it just stops instead.
+
+use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use std::io::{self, Read};
+use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Instant;
+
+const RATE: usize = 48_000;
+const FFT_SIZE: usize = 2048;
+const HOP: usize = 800; // 48000 / 800 = 60 updates per second
+const F_MIN: f32 = 40.0;
+const F_MAX: f32 = 16_000.0;
+const RANGE_DB: f32 = 45.0; // dB shown below the auto-gain ceiling
+const AGC_FALL_DB: f32 = 0.03; // ceiling drops ~1.8 dB/s after loud parts
+const AGC_FLOOR_DB: f32 = -50.0; // never amplify more than this (near-silence stays dark)
+const ATTACK: f32 = 0.5; // smoothing toward a higher value (per frame)
+const FALL: f32 = 0.08; // smoothing toward a lower value (per frame)
+
+#[derive(Clone, Debug)]
+pub enum Target {
+    /// Monitor of the default sink; follows the default if it changes.
+    DefaultSink,
+    /// Monitor of the sink with this node.name (whole-sink mix).
+    Sink(String),
+    /// A playback stream node, e.g. mpv's "omaestro" (= --audio-client-name).
+    /// Only exists while mpv has audio open: pw-record exits when it goes away.
+    Stream(String),
+}
+
+impl Target {
+    /// mpv `audio-device` -> target. "pipewire" / "auto" / "" -> default sink,
+    /// "pipewire/<node.name>" -> that sink's monitor.
+    pub fn from_mpv_device(dev: &str) -> Target {
+        match dev.strip_prefix("pipewire/") {
+            Some(name) if !name.is_empty() => Target::Sink(name.to_string()),
+            _ => Target::DefaultSink,
+        }
+    }
+}
+
+struct Shared {
+    bands: Vec<f32>,
+    updated: Instant,
+    alive: bool,
+}
+
+pub struct Visualizer {
+    child: Child,
+    shared: Arc<Mutex<Shared>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+fn spawn_pw_record(target: &Target) -> io::Result<Child> {
+    // node.dont-fallback: if the target is missing, fail instead of falling back
+    //   to the default SOURCE (= your microphone!).
+    // node.passive: don't keep an idle sink awake; no data flows while nothing plays.
+    // node.name: must differ from mpv's "omaestro" so a Stream target can't match us.
+    let (props, name) = match target {
+        Target::DefaultSink => (
+            "{ stream.capture.sink=true node.dont-fallback=true node.passive=true node.name=omaestro-vis }",
+            None,
+        ),
+        Target::Sink(n) => (
+            "{ stream.capture.sink=true node.dont-fallback=true node.passive=true node.name=omaestro-vis }",
+            Some(n),
+        ),
+        Target::Stream(n) => (
+            "{ node.dont-fallback=true node.passive=true node.name=omaestro-vis }",
+            Some(n),
+        ),
+    };
+    let mut cmd = Command::new("pw-record");
+    cmd.args([
+        "--raw",
+        "--format",
+        "f32",
+        "--rate",
+        "48000",
+        "--channels",
+        "2",
+    ]);
+    cmd.args(["--latency", "20ms", "-P", props]);
+    if let Some(n) = name {
+        cmd.args(["--target", n]);
+    }
+    cmd.arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
+impl Visualizer {
+    pub fn start(target: Target, n_bands: usize) -> io::Result<Visualizer> {
+        let mut child = spawn_pw_record(&target)?;
+        let stdout = child.stdout.take().expect("piped stdout");
+        let shared = Arc::new(Mutex::new(Shared {
+            bands: vec![0.0; n_bands],
+            updated: Instant::now(),
+            alive: true,
+        }));
+        let sh = Arc::clone(&shared);
+        let thread = thread::spawn(move || reader_loop(stdout, sh, n_bands));
+        Ok(Visualizer {
+            child,
+            shared,
+            thread: Some(thread),
+        })
+    }
+
+    /// Current bars, 0..1. Fades out if no audio has arrived recently
+    /// (pause / nothing playing: pw-record then sends nothing at all).
+    pub fn bands(&self) -> Vec<f32> {
+        let s = self.shared.lock().unwrap();
+        let stale = s.updated.elapsed().as_secs_f32();
+        let k = if stale < 0.1 {
+            1.0
+        } else {
+            (-(stale - 0.1) * 6.0).exp()
+        };
+        s.bands.iter().map(|b| b * k).collect()
+    }
+
+    /// False once pw-record has exited (target vanished or failed to link).
+    pub fn is_alive(&self) -> bool {
+        self.shared.lock().unwrap().alive
+    }
+}
+
+impl Drop for Visualizer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait(); // reap, no zombie
+        if let Some(t) = self.thread.take() {
+            let _ = t.join(); // stdout hit EOF when the child died
+        }
+    }
+}
+
+fn reader_loop(mut stdout: ChildStdout, shared: Arc<Mutex<Shared>>, n_bands: usize) {
+    let mut an = Analyzer::new(n_bands);
+    let mut buf = vec![0u8; HOP * 2 * 4]; // HOP stereo f32 frames
+    let mut ring = vec![0f32; FFT_SIZE]; // last FFT_SIZE mono samples
+    while stdout.read_exact(&mut buf).is_ok() {
+        ring.copy_within(HOP.., 0);
+        let tail = &mut ring[FFT_SIZE - HOP..];
+        for (dst, fr) in tail.iter_mut().zip(buf.as_chunks::<8>().0) {
+            let l = f32::from_le_bytes([fr[0], fr[1], fr[2], fr[3]]);
+            let r = f32::from_le_bytes([fr[4], fr[5], fr[6], fr[7]]);
+            *dst = 0.5 * (l + r);
+        }
+        let bands = an.process(&ring);
+        let mut s = shared.lock().unwrap();
+        s.bands.copy_from_slice(bands);
+        s.updated = Instant::now();
+    }
+    shared.lock().unwrap().alive = false;
+}
+
+/// (first_bin, end_bin) per band, log-spaced F_MIN..F_MAX. Every band gets at
+/// least one bin of its own (low bands are only ~23 Hz apart at 2048/48k).
+fn band_bins(n: usize) -> Vec<(usize, usize)> {
+    let bin_hz = RATE as f32 / FFT_SIZE as f32;
+    let edge = |i: usize| F_MIN * (F_MAX / F_MIN).powf(i as f32 / n as f32) / bin_hz;
+    let mut out = Vec::with_capacity(n);
+    let mut prev_end = 1; // skip DC
+    for i in 0..n {
+        let lo = (edge(i).round() as usize).max(prev_end);
+        let hi = (edge(i + 1).round() as usize).max(lo + 1).min(FFT_SIZE / 2);
+        out.push((lo, hi));
+        prev_end = hi;
+    }
+    out
+}
+
+struct Analyzer {
+    fft: Arc<dyn Fft<f32>>,
+    window: Vec<f32>,
+    buf: Vec<Complex<f32>>,
+    scratch: Vec<Complex<f32>>,
+    bins: Vec<(usize, usize)>,
+    db: Vec<f32>,
+    out: Vec<f32>,
+    agc_db: f32,
+}
+
+impl Analyzer {
+    fn new(n_bands: usize) -> Analyzer {
+        let fft = FftPlanner::new().plan_fft_forward(FFT_SIZE);
+        let scratch = vec![Complex::default(); fft.get_inplace_scratch_len()];
+        let window = (0..FFT_SIZE)
+            .map(|i| {
+                let x = std::f32::consts::TAU * i as f32 / (FFT_SIZE - 1) as f32;
+                0.5 - 0.5 * x.cos() // Hann
+            })
+            .collect();
+        Analyzer {
+            fft,
+            window,
+            buf: vec![Complex::default(); FFT_SIZE],
+            scratch,
+            bins: band_bins(n_bands),
+            db: vec![0.0; n_bands],
+            out: vec![0.0; n_bands],
+            agc_db: AGC_FLOOR_DB,
+        }
+    }
+
+    /// `mono` = last FFT_SIZE samples. Returns smoothed bands in 0..1.
+    fn process(&mut self, mono: &[f32]) -> &[f32] {
+        for ((b, &x), &w) in self.buf.iter_mut().zip(mono).zip(&self.window) {
+            *b = Complex::new(x * w, 0.0);
+        }
+        self.fft
+            .process_with_scratch(&mut self.buf, &mut self.scratch);
+
+        // Power summed per band -> dB. Scaled so a full-scale sine is ~0 dB.
+        // Summing power over log-wide bands makes pink noise (and most music) look flat.
+        let n = FFT_SIZE as f32;
+        let norm = 32.0 / (3.0 * n * n);
+        let mut frame_max = f32::MIN;
+        for (d, &(lo, hi)) in self.db.iter_mut().zip(&self.bins) {
+            let p: f32 = self.buf[lo..hi].iter().map(|c| c.norm_sqr()).sum();
+            *d = 10.0 * (p * norm + 1e-12).log10();
+            frame_max = frame_max.max(*d);
+        }
+
+        // Auto-gain: ceiling jumps up instantly, then sinks slowly.
+        self.agc_db = if frame_max > self.agc_db {
+            frame_max
+        } else {
+            (self.agc_db - AGC_FALL_DB).max(AGC_FLOOR_DB)
+        };
+
+        let floor = self.agc_db - RANGE_DB;
+        for (o, &d) in self.out.iter_mut().zip(&self.db) {
+            let v = ((d - floor) / RANGE_DB).clamp(0.0, 1.0);
+            let k = if v > *o { ATTACK } else { FALL };
+            *o += (v - *o) * k;
+        }
+        &self.out
+    }
+}
