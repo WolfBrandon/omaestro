@@ -38,8 +38,49 @@ pub struct Playback {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
-    pub album_art: bool,
+    pub album_art: Art,
     pub visualizer: bool,
+}
+
+/// How the cover is drawn: as a real picture (sixel or the kitty protocol, in terminals that
+/// can), as coloured blocks (anywhere), or not at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Art {
+    LoRes,
+    #[default]
+    HiRes,
+    Off,
+}
+
+impl Serialize for Art {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match self {
+            Art::LoRes => "lo-res",
+            Art::HiRes => "hi-res",
+            Art::Off => "off",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Art {
+    /// "hi-res", "lo-res" or "off"; older settings files said true or false.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Art, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Text(String),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Bool(false) => Art::Off,
+            Raw::Bool(true) => Art::HiRes,
+            Raw::Text(t) => match t.as_str() {
+                "off" => Art::Off,
+                "lo-res" | "low" => Art::LoRes,
+                _ => Art::HiRes,
+            },
+        })
+    }
 }
 
 /// The output picker's lists: device ids (mpv names or Sonos RINCON ids).
@@ -94,7 +135,7 @@ impl Default for Playback {
 impl Default for Appearance {
     fn default() -> Self {
         Appearance {
-            album_art: true,
+            album_art: Art::HiRes,
             visualizer: true,
         }
     }
@@ -187,5 +228,25 @@ pub fn expand_tilde(path: &str) -> PathBuf {
     match path.strip_prefix("~") {
         Some(rest) => home().join(rest.trim_start_matches('/')),
         None => PathBuf::from(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn album_art_reads_old_and_new_settings() {
+        let read = |text: &str| toml::from_str::<Appearance>(text).unwrap().album_art;
+        assert_eq!(read("album_art = true"), Art::HiRes);
+        assert_eq!(read("album_art = false"), Art::Off);
+        assert_eq!(read("album_art = \"lo-res\""), Art::LoRes);
+        assert_eq!(read(""), Art::HiRes);
+        let written = toml::to_string(&Appearance {
+            album_art: Art::LoRes,
+            visualizer: true,
+        })
+        .unwrap();
+        assert!(written.contains("album_art = \"lo-res\""), "{written}");
     }
 }

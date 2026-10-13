@@ -330,18 +330,33 @@ impl Browse {
     }
 
     /// What Enter does in the results or song list.
+    /// Enter or a double-click: adds the song (or album) to the end of the queue without
+    /// playing it. The browser never replaces the queue, so an open playlist is safe. On an
+    /// artist it goes to their songs instead.
     pub fn enter(&mut self) -> Step {
-        if self.pane == Pane::Songs {
-            return self.play_songs();
+        if self.pane != Pane::Songs && matches!(self.selected(), Some(Row::Artist(_))) {
+            self.pane = Pane::Songs;
+            return Step::Stay;
         }
-        match self.selected() {
-            // An artist has too many songs to just start; go and pick one.
-            Some(Row::Artist(_)) => {
-                self.pane = Pane::Songs;
-                Step::Stay
-            }
-            Some(_) => self.play_songs(),
-            None => Step::Stay,
+        self.add()
+    }
+
+    /// What `a`, Enter and a double-click add: the highlighted song in the song list, or the
+    /// song or album picked in the results (an artist's whole catalogue with `a`).
+    fn add(&self) -> Step {
+        let tracks = if self.pane == Pane::Songs {
+            self.tracks
+                .get(self.track_sel)
+                .cloned()
+                .into_iter()
+                .collect()
+        } else {
+            self.tracks_for_selected()
+        };
+        if tracks.is_empty() {
+            Step::Stay
+        } else {
+            Step::Do(Action::Enqueue(tracks))
         }
     }
 
@@ -437,34 +452,9 @@ impl Browse {
                 Step::Stay
             }
             KeyCode::Enter => self.enter(),
-            KeyCode::Char('a') => {
-                let tracks = if on_songs {
-                    self.tracks
-                        .get(self.track_sel)
-                        .cloned()
-                        .into_iter()
-                        .collect()
-                } else {
-                    self.tracks_for_selected()
-                };
-                if tracks.is_empty() {
-                    Step::Stay
-                } else {
-                    Step::Do(Action::Enqueue(tracks))
-                }
-            }
+            KeyCode::Char('a') => self.add(),
             _ => Step::Ignored,
         })
-    }
-
-    /// Plays the right-hand list from its selected song: the album (or artist) carries on
-    /// afterwards.
-    fn play_songs(&self) -> Step {
-        if self.tracks.is_empty() {
-            Step::Stay
-        } else {
-            Step::Do(Action::Play(self.tracks.clone(), self.track_sel))
-        }
     }
 
     fn search_key(&mut self, key: KeyEvent, catalog: &Catalog, db: &Db) -> Result<Step> {
@@ -659,10 +649,11 @@ mod tests {
 
         press(&mut b, &catalog, &db, KeyCode::Enter);
         assert_eq!(b.pane, Pane::Results);
-        match press(&mut b, &catalog, &db, KeyCode::Enter) {
-            Step::Do(Action::Play(tracks, 1)) => assert_eq!(tracks.len(), 2),
-            other => panic!("expected Play(album, 1), got {other:?}"),
-        }
+        // Enter on a song adds just that song; it never replaces the queue.
+        assert_eq!(
+            press(&mut b, &catalog, &db, KeyCode::Enter),
+            Step::Do(Action::Enqueue(b.songs.clone()))
+        );
         assert_eq!(
             press(&mut b, &catalog, &db, KeyCode::Char('a')),
             Step::Do(Action::Enqueue(b.songs.clone()))
@@ -686,13 +677,13 @@ mod tests {
         assert!(b.tracks_by_artist);
         assert_eq!(titles(&b.tracks), ["Cosmik Debris", "Peaches"]);
 
-        // Enter on an artist moves to its songs; Enter there plays from the chosen one.
+        // Enter on an artist moves to its songs; Enter there adds just the chosen one.
         assert_eq!(press(&mut b, &catalog, &db, KeyCode::Enter), Step::Stay);
         assert_eq!(b.pane, Pane::Songs);
         press(&mut b, &catalog, &db, KeyCode::Char('j'));
         match press(&mut b, &catalog, &db, KeyCode::Enter) {
-            Step::Do(Action::Play(tracks, 1)) => assert_eq!(tracks.len(), 2),
-            other => panic!("expected Play(artist, 1), got {other:?}"),
+            Step::Do(Action::Enqueue(tracks)) => assert_eq!(titles(&tracks), ["Peaches"]),
+            other => panic!("expected Enqueue(Peaches), got {other:?}"),
         }
 
         // 1 hides artists, so the album matches come first; the last toggle can't go off.

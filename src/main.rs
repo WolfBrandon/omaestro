@@ -123,8 +123,10 @@ fn run_player() -> Result<()> {
         previous_hook(info);
     }));
     let mut terminal = ratatui::init();
-    if app.config.appearance.album_art {
-        app.picker = Some(art::picker());
+    if app.config.appearance.album_art != config::Art::Off {
+        let picker = art::picker(app.config.appearance.album_art);
+        app.best_pictures = Some(picker.protocol_type());
+        app.picker = Some(picker);
     }
     // Clicks and the scroll wheel come to OMAESTRO (Shift+drag still selects text), and pasted
     // text arrives in one piece.
@@ -400,6 +402,7 @@ fn event_loop(
                 queue: player.queue(),
                 devices: &player.status.devices,
                 output: &player.output,
+                playlist: player.playlist.as_ref(),
             };
             let action = match event {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key, &ctx)?,
@@ -482,12 +485,6 @@ fn apply(
     scan_tx: &Sender<ScanMsg>,
 ) -> Result<()> {
     match action {
-        Action::Play(tracks, start) => {
-            // A new queue isn't the playlist it was opened from any more.
-            app.playlist = None;
-            app.queue_sel = start;
-            player.play(tracks, start)?;
-        }
         Action::PlayNow(track) => {
             app.status = format!("Playing {}", track.title);
             player.play_now(track)?;
@@ -496,7 +493,13 @@ fn apply(
             }
         }
         Action::Enqueue(tracks) => {
-            app.status = format!("Added {} to the queue", plural(tracks.len(), "track"));
+            app.status = match tracks.as_slice() {
+                [one] => format!("Added {} to the queue (Ctrl+Z takes it back)", one.title),
+                many => format!(
+                    "Added {} to the queue (Ctrl+Z takes them back)",
+                    plural(many.len(), "song")
+                ),
+            };
             player.enqueue(tracks)?;
         }
         Action::Jump(index) => player.jump(index)?,
@@ -511,22 +514,23 @@ fn apply(
         }
         Action::Move(index, up) => app.queue_sel = player.move_track(index, up)?,
         Action::Undo => {
-            if !player.undo()? {
-                app.status = "Nothing to undo".into();
-            }
+            app.status = match player.undo()? {
+                Some(what) => format!("Undone: {what}"),
+                None => "Nothing to undo".into(),
+            };
             app.queue_sel = app.queue_sel.min(player.queue().len().saturating_sub(1));
         }
         Action::Clear => {
             player.clear()?;
             app.queue_sel = 0;
-            app.status = "Queue cleared (u brings it back)".into();
+            app.status = "Queue cleared (Ctrl+Z brings it back)".into();
         }
         Action::SavePlaylist(name) => {
             let path = playlist::file_for(&app.playlist_dir, &name);
             match playlist::save(&path, &name, player.queue()) {
                 Ok(()) => {
                     app.status = format!("Saved {name}");
-                    app.playlist = Some(app::Named {
+                    player.playlist = Some(player::Named {
                         name,
                         path,
                         saved: player.revision,
@@ -536,18 +540,19 @@ fn apply(
             }
         }
         Action::LoadPlaylist { name, path, tracks } => {
-            app.status = format!("Opened {name}: {}", plural(tracks.len(), "track"));
-            player.load(tracks)?;
-            app.queue_sel = 0;
+            app.status = format!("Opened {name}: {}", plural(tracks.len(), "song"));
             // Imported playlists have no file yet: s asks for a name to save them under.
-            app.playlist = path.map(|path| app::Named {
+            let named = path.map(|path| player::Named {
                 name,
                 path,
-                saved: player.revision,
+                saved: 0,
             });
+            player.load(tracks, named)?;
+            app.queue_sel = 0;
         }
         Action::Settings { rescan } => {
             app.config.save()?;
+            app.apply_art();
             player.set_replaygain(&app.config.playback.replaygain)?;
             player.set_gapless(app.config.playback.gapless)?;
             if rescan && !app.scanning {

@@ -83,10 +83,21 @@ pub struct Status {
     pub last_error: Option<String>,
 }
 
-/// The queue as it was before an edit, for undo.
+/// The saved playlist the queue came from or was saved as.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Named {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    /// The queue's revision when it was last saved or opened.
+    pub saved: u64,
+}
+
+/// The queue as it was before an edit, for undo, and what the edit was.
 struct Snapshot {
     queue: Vec<Track>,
     current: Option<usize>,
+    playlist: Option<Named>,
+    what: String,
 }
 
 /// How many edits undo can go back.
@@ -120,6 +131,9 @@ pub struct Player {
     undo: Vec<Snapshot>,
     /// Goes up with every change to the queue, so the screen can tell it was edited after saving.
     pub revision: u64,
+    /// The playlist the queue holds, if it was opened or saved as one. Part of the queue's
+    /// history, so undo brings it back too.
+    pub playlist: Option<Named>,
     /// The path handed to mpv as "up next", if any.
     upcoming: Option<String>,
     /// The path just loaded with `jump`. mpv's first report of it isn't a gapless move.
@@ -150,6 +164,7 @@ impl Player {
             current: None,
             undo: Vec::new(),
             revision: 0,
+            playlist: None,
             upcoming: None,
             loading: None,
             status: Status {
@@ -180,11 +195,14 @@ impl Player {
 
     // ---- the queue ---------------------------------------------------------------------
 
-    /// Keeps a copy of the queue for undo; call before changing it.
-    fn remember(&mut self) {
+    /// Keeps a copy of the queue for undo, with a few words about the change to come; call
+    /// before changing it.
+    fn remember(&mut self, what: String) {
         self.undo.push(Snapshot {
             queue: self.queue.clone(),
             current: self.current,
+            playlist: self.playlist.clone(),
+            what,
         });
         if self.undo.len() > UNDO_STEPS {
             self.undo.remove(0);
@@ -192,37 +210,53 @@ impl Player {
         self.revision += 1;
     }
 
-    /// Replaces the queue with `tracks` and plays from `start`.
+    /// Replaces the queue with `tracks` and plays from `start`. The queue isn't the playlist
+    /// it was any more. (Only the tests start a queue this way; the app adds to it instead.)
+    #[cfg(test)]
     pub fn play(&mut self, tracks: Vec<Track>, start: usize) -> Result<()> {
-        self.remember();
+        self.remember("replaced the queue".into());
         self.queue = tracks;
+        self.playlist = None;
         self.upcoming = None;
         self.jump(start)
     }
 
     /// Replaces the queue without playing it (an opened playlist). Play starts at the top.
-    pub fn load(&mut self, tracks: Vec<Track>) -> Result<()> {
-        self.remember();
+    pub fn load(&mut self, tracks: Vec<Track>, playlist: Option<Named>) -> Result<()> {
+        let what = match &playlist {
+            Some(p) => format!("opened {}", p.name),
+            None => "opened a playlist".into(),
+        };
+        self.remember(what);
         self.queue = tracks;
         self.current = (!self.queue.is_empty()).then_some(0);
+        self.playlist = playlist.map(|p| Named {
+            saved: self.revision,
+            ..p
+        });
         self.stop()
     }
 
     /// Plays a song right away, putting it after the one playing so the queue carries on.
     pub fn play_now(&mut self, track: Track) -> Result<()> {
-        self.remember();
+        self.remember(format!("played {}", track.title));
         let at = self.current.map_or(self.queue.len(), |c| c + 1);
         self.queue.insert(at, track);
         self.jump(at)
     }
 
-    /// Adds tracks to the end of the queue. If nothing is playing, starts the first of them.
+    /// Adds tracks to the end of the queue without playing them. In an empty queue, play
+    /// starts with the first of them.
     pub fn enqueue(&mut self, tracks: Vec<Track>) -> Result<()> {
-        self.remember();
+        let what = match tracks.as_slice() {
+            [one] => format!("added {}", one.title),
+            many => format!("added {} songs", many.len()),
+        };
+        self.remember(what);
         let first_new = self.queue.len();
         self.queue.extend(tracks);
-        if self.current.is_none() || self.status.idle {
-            return self.jump(first_new);
+        if self.current.is_none() && first_new < self.queue.len() {
+            self.current = Some(first_new);
         }
         self.sync_upcoming()
     }
@@ -232,7 +266,7 @@ impl Player {
         if index >= self.queue.len() {
             return Ok(());
         }
-        self.remember();
+        self.remember(format!("removed {}", self.queue[index].title));
         self.queue.remove(index);
         match self.current {
             Some(c) if c == index => {
@@ -268,7 +302,7 @@ impl Player {
         let Some(other) = other.filter(|_| index < self.queue.len()) else {
             return Ok(index);
         };
-        self.remember();
+        self.remember(format!("moved {}", self.queue[index].title));
         self.queue.swap(index, other);
         self.current = self.current.map(|c| match c {
             c if c == index => other,
@@ -284,20 +318,22 @@ impl Player {
         if self.queue.is_empty() {
             return Ok(());
         }
-        self.remember();
+        self.remember("cleared the queue".into());
         self.queue.clear();
         self.current = None;
         self.stop()
     }
 
-    /// Puts the queue back as it was before the last edit. The song playing carries on; it
-    /// keeps its ▶ if it's in the restored queue. Returns false when there's nothing to undo.
-    pub fn undo(&mut self) -> Result<bool> {
+    /// Puts the queue (and the playlist it was) back as before the last edit. The song playing
+    /// carries on; it keeps its ▶ if it's in the restored queue. Returns what was undone, or
+    /// None when there's nothing to undo.
+    pub fn undo(&mut self) -> Result<Option<String>> {
         let Some(snap) = self.undo.pop() else {
-            return Ok(false);
+            return Ok(None);
         };
         let playing = self.current().filter(|_| !self.status.idle).cloned();
         self.queue = snap.queue;
+        self.playlist = snap.playlist;
         self.revision += 1;
         self.current = match playing {
             Some(track) => {
@@ -309,7 +345,7 @@ impl Player {
             None => snap.current.filter(|&i| i < self.queue.len()),
         };
         self.sync_upcoming()?;
-        Ok(true)
+        Ok(Some(snap.what))
     }
 
     // ---- playing -----------------------------------------------------------------------
@@ -1097,7 +1133,7 @@ mod tests {
         assert!(player.revision > before);
 
         let mut steps = Vec::new();
-        while player.undo().unwrap() {
+        while player.undo().unwrap().is_some() {
             steps.push(titles(&player).join(""));
         }
         assert_eq!(
@@ -1106,7 +1142,7 @@ mod tests {
             "each edit, newest first"
         );
 
-        player.load(named(&["x", "y"])).unwrap();
+        player.load(named(&["x", "y"]), None).unwrap();
         assert_eq!(
             player.current_index(),
             Some(0),

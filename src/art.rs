@@ -109,24 +109,19 @@ pub fn load(track: &Track) -> Option<DynamicImage> {
     }
 }
 
-/// How this terminal shows pictures. Terminals known to draw them (foot, Ghostty, kitty,
-/// WezTerm) are asked which way and how big a character is; that has to happen before any key
-/// is read. Others get coloured half-blocks without asking: a terminal that doesn't answer
-/// would hold things up for two seconds and swallow the next key.
-pub fn picker() -> Picker {
-    let term = std::env::var("TERM").unwrap_or_default();
-    let program = std::env::var("TERM_PROGRAM")
-        .unwrap_or_default()
-        .to_lowercase();
-    let answers = term.starts_with("foot")
-        || term.contains("ghostty")
-        || term.contains("kitty")
-        || program == "ghostty"
-        || program == "wezterm";
-    if answers && std::env::var_os("TMUX").is_none() {
-        Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
-    } else {
-        Picker::halfblocks()
+/// How to draw covers for the chosen setting. Hi-res asks the terminal which picture
+/// protocol it speaks (sixel in foot, kitty in Ghostty) and how big a character is; that has to
+/// happen before any key is read. A terminal that can't show pictures gets coloured blocks.
+/// Lo-res is coloured blocks without asking.
+pub fn picker(art: crate::config::Art) -> Picker {
+    use ratatui_image::picker::cap_parser::QueryStdioOptions;
+    match art {
+        crate::config::Art::HiRes => Picker::from_query_stdio_with_options(QueryStdioOptions {
+            timeout: std::time::Duration::from_millis(800),
+            ..QueryStdioOptions::default()
+        })
+        .unwrap_or_else(|_| Picker::halfblocks()),
+        _ => Picker::halfblocks(),
     }
 }
 

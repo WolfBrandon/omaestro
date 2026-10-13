@@ -75,19 +75,22 @@ button. In foot, Ctrl+Shift+O also picks out links on screen.
 | `n` / `p` | Next / previous |
 | `,` / `.` | Back / forward 10 seconds |
 | `-` / `+` | Volume (only OMAESTRO's, not the desktop's) |
-| `o` | Where to play: this computer's outputs or a Sonos group. `f` stars one, `h` hides one, `H` shows hidden ones |
+| `o` | Where to play: this computer's outputs and the Sonos groups (marked [SONOS]) in one list. `f` stars one, `h` hides one, `H` shows hidden ones |
+| `Ctrl+Z` | Undo the last change to the queue, from anywhere (the status line says what was undone) |
 | `m` | Minimize into the `special:omaestro` scratchpad; the tray icon or a media widget brings it back |
 | `F2` | Settings |
 | `r` | Check the music folders for changes |
 | `q` | Quit (the music stops) |
 
-In the queue: `d` removes, `J`/`K` move, `u` undoes, `c` clears, `s` saves, `S` saves as,
-`O` opens a playlist (saved ones, or your Spotify and YouTube Music playlists).
+In the queue: `d` removes, `J`/`K` move, `u` or `Ctrl+Z` undoes, `c` clears, `s` saves, `S`
+saves as, `O` opens a playlist (saved ones, or your Spotify and YouTube Music playlists).
+Undo brings back the playlist's name too.
 
 In the browser, typing goes into the search box. Results are grouped into artists, albums and
 songs; while more than one group shows, each lists its best matches, and `1` `2` `3` show or
-hide a group. `Tab` moves between the search box, results and songs; `Enter` on an album or
-song plays its album from there, on an artist it shows their songs; `a` adds to the queue.
+hide a group. `Tab` moves between the search box, results and songs. `Enter` (or a
+double-click) adds the song or album to the end of the queue without playing it; on an artist
+it shows their songs. The browser never replaces the queue, so an open playlist is safe.
 
 In Search, `Enter` plays a song right away (the queue carries on after it), `a` adds it,
 `A` adds everything that source found.
@@ -111,7 +114,7 @@ output = ""                             # "" here, or "sonos:<speaker id>"
 volume = 100
 
 [appearance]
-album_art = true
+album_art = "hi-res"                    # "hi-res" (real pictures), "lo-res" (coloured blocks) or "off"
 visualizer = true
 
 [outputs]                               # the picker's stars and hidden ones

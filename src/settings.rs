@@ -4,7 +4,7 @@
 
 use crate::app::{Action, group_thousands};
 use crate::browse::{movement, step};
-use crate::config::Config;
+use crate::config::{Art, Config};
 use crate::library::Source;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::cell::Cell;
@@ -262,7 +262,14 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         4,
         "Album art",
         Id::AlbumArt,
-        on_off(config.appearance.album_art),
+        Value::Choice(
+            vec!["On (lo-res)", "On (hi-res)", "Off"],
+            match config.appearance.album_art {
+                Art::LoRes => 0,
+                Art::HiRes => 1,
+                Art::Off => 2,
+            },
+        ),
     ));
     rows.push(
         Row::new(
@@ -429,7 +436,9 @@ impl Settings {
         match id {
             Id::ScanOnLaunch => config.scan_on_launch = on,
             Id::Gapless => config.playback.gapless = on,
-            Id::AlbumArt => config.appearance.album_art = on,
+            Id::AlbumArt => {
+                config.appearance.album_art = [Art::LoRes, Art::HiRes, Art::Off][n.min(2)]
+            }
             Id::Visualizer => config.appearance.visualizer = on,
             Id::ReplayGain => {
                 config.playback.replaygain = ["off", "track", "album"][n.min(2)].to_string()

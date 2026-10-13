@@ -49,6 +49,7 @@ const I_CLEAR: &str = "\u{f1f8}";
 const I_STAR: &str = "\u{f005}";
 const I_STAR_O: &str = "\u{f006}";
 const I_TV: &str = "\u{f26c}";
+const I_WIFI: &str = "\u{f1eb}";
 
 /// The logo: headphones over the first O. Each row's characters, then each character's colour
 /// (M dark_foreground, B bright_foreground, L light_foreground, F foreground).
@@ -229,7 +230,7 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
         Some(Overlay::Picker { sel, all }) => {
             draw_picker(buf, area, a.output, app, player, *sel, *all, t, &mut hit)
         }
-        Some(Overlay::SaveAs(name)) => draw_save_as(buf, area, app, name, t, &mut hit),
+        Some(Overlay::SaveAs(name)) => draw_save_as(buf, area, app, player, name, t, &mut hit),
         Some(Overlay::Open(open)) => screens::draw_open(buf, area, open, t, &mut hit),
         Some(Overlay::Search) => screens::draw_search(buf, area, &app.search, player, t, &mut hit),
         Some(Overlay::Settings(s)) => {
@@ -820,13 +821,13 @@ fn draw_queue(
     if full {
         // The playlist's name and its buttons, as in the design.
         let x = put(buf, inner, cx, y, &format!("{I_LIST}  "), fg(t.fg));
-        let name = app
+        let name = player
             .playlist
             .as_ref()
             .map_or("Untitled", |p| p.name.as_str());
         let x = put(buf, inner, x, y, &fit(name, 30), bold(t.bright));
         let unsaved = !queue.is_empty()
-            && app
+            && player
                 .playlist
                 .as_ref()
                 .is_none_or(|p| p.saved != player.revision);
@@ -981,16 +982,16 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
                 ("Esc", "close"),
             ],
             Pane::Results => &[
-                ("⏎", "play"),
-                ("a", "add to queue"),
+                ("⏎", "add to queue"),
+                ("^Z", "undo"),
                 ("1 2 3", "filters"),
                 ("/", "search"),
                 ("Tab", "next pane"),
                 ("b", "close"),
             ],
             Pane::Songs => &[
-                ("⏎", "play from here"),
-                ("a", "add to queue"),
+                ("⏎", "add to queue"),
+                ("^Z", "undo"),
                 ("Tab", "next pane"),
                 ("b", "close"),
             ],
@@ -1002,7 +1003,7 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
             ("/", "search"),
             ("d", "remove"),
             ("J/K", "move"),
-            ("u", "undo"),
+            ("^Z", "undo"),
             ("s", "save"),
             ("O", "open"),
             ("␣", "pause"),
@@ -1084,8 +1085,8 @@ fn centred(screen: Rect, w: u16, h: u16) -> Rect {
     )
 }
 
-/// The "Play to" list, hanging from the output button: this computer's devices, then the
-/// Sonos groups, as in the design's Output tab.
+/// The "Play to" list, hanging from the output button: one list of this computer's outputs
+/// and the Sonos groups, the Sonos ones marked [SONOS].
 #[allow(clippy::too_many_arguments)]
 fn draw_picker(
     buf: &mut Buffer,
@@ -1102,24 +1103,12 @@ fn draw_picker(
         queue: player.queue(),
         devices: &player.status.devices,
         output: &player.output,
+        playlist: player.playlist.as_ref(),
     };
     let rows = app.picker_rows(&ctx, all);
-    let shown_all = app.picker_rows(&ctx, true);
-    let sonos_rows = rows
-        .iter()
-        .filter(|r| matches!(r.choice, OutputChoice::Sonos(_)))
-        .count();
-    let here_rows = rows.len() - sonos_rows;
-    let hidden = |sonos: bool| {
-        let total = shown_all
-            .iter()
-            .filter(|r| matches!(r.choice, OutputChoice::Sonos(_)) == sonos)
-            .count();
-        let shown = if sonos { sonos_rows } else { here_rows };
-        total - shown
-    };
-    let w = 56.min(screen.width);
-    let h = (rows.len() as u16 + 11).min(screen.height);
+    let hidden = app.picker_rows(&ctx, true).len() - rows.len();
+    let w = 60.min(screen.width);
+    let h = (rows.len() as u16 + 8).min(screen.height);
     let r = match anchor {
         Some(b) => Rect::new(b.right().saturating_sub(w).max(screen.x), b.bottom(), w, h)
             .intersection(screen),
@@ -1128,36 +1117,8 @@ fn draw_picker(
     let inner = popup(buf, r, "PLAY TO", t, hit);
     let (cx, cr) = (inner.x + 1, inner.right().saturating_sub(2));
     let mut y = inner.y;
-    let mut section = None;
     for (i, row) in rows.iter().enumerate() {
         let sonos = matches!(row.choice, OutputChoice::Sonos(_));
-        if section != Some(sonos) {
-            if section == Some(false) {
-                if hidden(false) > 0 {
-                    let more = format!("+ {} hidden  (H to show)", hidden(false));
-                    put(
-                        buf,
-                        inner,
-                        cx + 2,
-                        y,
-                        &more,
-                        fg(t.dim).add_modifier(Modifier::ITALIC),
-                    );
-                    y += 1;
-                }
-                y += 1;
-            }
-            put(
-                buf,
-                inner,
-                cx,
-                y,
-                if sonos { "SONOS" } else { "THIS COMPUTER" },
-                bold(t.dim),
-            );
-            y += 1;
-            section = Some(sonos);
-        }
         let line = Rect::new(inner.x, y, inner.width, 1).intersection(inner);
         hit(line, Target::Device(i));
         if i == selected {
@@ -1166,12 +1127,19 @@ fn draw_picker(
         if row.current {
             put(buf, inner, cx, y, "●", fg(t.accent));
         }
-        let icon = if sonos || row.name == "Default output" {
+        let icon = if sonos {
+            I_WIFI
+        } else if row.name == "Default output" {
             I_VOLUME
         } else {
             I_HEADPHONES
         };
         let x = put(buf, inner, cx + 2, y, &format!("{icon}  "), fg(t.light));
+        let x = if sonos {
+            put(buf, inner, x, y, "[SONOS] ", bold(t.dim))
+        } else {
+            x
+        };
         let style = if row.current {
             bold(t.bright)
         } else {
@@ -1185,14 +1153,8 @@ fn draw_picker(
             x
         };
         if !row.note.is_empty() {
-            put(
-                buf,
-                inner,
-                x + 2,
-                y,
-                &fit(&row.note, cr.saturating_sub(x + 4)),
-                fg(t.dim),
-            );
+            let w = cr.saturating_sub(x + 4);
+            put(buf, inner, x + 2, y, &fit(&row.note, w), fg(t.dim));
         }
         if row.hidden {
             put_right(buf, inner, cr.saturating_sub(2), y, "hidden", fg(t.dim));
@@ -1205,26 +1167,15 @@ fn draw_picker(
         put(buf, inner, cr, y, star, fg(color));
         y += 1;
     }
-    if section == Some(false) && hidden(false) > 0 {
-        let more = format!("+ {} hidden  (H to show)", hidden(false));
+    let italic = fg(t.dim).add_modifier(Modifier::ITALIC);
+    if hidden > 0 {
         put(
             buf,
             inner,
             cx + 2,
             y,
-            &more,
-            fg(t.dim).add_modifier(Modifier::ITALIC),
-        );
-        y += 1;
-    }
-    if section == Some(true) && hidden(true) > 0 {
-        put(
-            buf,
-            inner,
-            cx + 2,
-            y,
-            &format!("+ {} hidden", hidden(true)),
-            fg(t.dim).add_modifier(Modifier::ITALIC),
+            &format!("+ {hidden} hidden  (H to show)"),
+            italic,
         );
         y += 1;
     }
@@ -1233,14 +1184,7 @@ fn draw_picker(
     } else {
         "Looking for Sonos speakers…"
     };
-    put(
-        buf,
-        inner,
-        cx,
-        y + 1,
-        note,
-        fg(t.dim).add_modifier(Modifier::ITALIC),
-    );
+    put(buf, inner, cx, y + 1, note, italic);
     let pairs = [
         ("⏎", "play"),
         ("f", "fav"),
@@ -1270,14 +1214,14 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("↑↓  j k", "Move the highlight; ⏎ plays it"),
         ("d", "Remove it from the queue"),
         ("J  K", "Move it down or up"),
-        ("u  c", "Undo the last change, clear the queue"),
+        ("^Z  c", "Undo the last change (anywhere), clear the queue"),
         ("s  S", "Save, or save as a new playlist"),
         ("O", "Open a playlist (saved, Spotify, YouTube Music)"),
         ("", ""),
         ("Browser", ""),
         ("Tab", "Next pane: search, results, songs"),
         ("1 2 3", "Show or hide artists, albums, songs"),
-        ("a", "Add to the queue"),
+        ("⏎  a", "Add to the queue (never replaces it)"),
         ("Esc  b", "Close"),
         ("", ""),
         ("Mouse", "Click buttons and rows, double-click plays"),
@@ -1308,6 +1252,7 @@ fn draw_save_as(
     buf: &mut Buffer,
     screen: Rect,
     app: &App,
+    player: &Player,
     name: &str,
     t: &Theme,
     hit: &mut impl FnMut(Rect, Target),
@@ -1321,7 +1266,7 @@ fn draw_save_as(
     put(buf, field, x, field.y, "▏", fg(t.accent));
     // Saving over a different playlist is allowed, but say so first.
     let path = crate::playlist::file_for(&app.playlist_dir, name);
-    let mine = app.playlist.as_ref().is_some_and(|p| p.path == path);
+    let mine = player.playlist.as_ref().is_some_and(|p| p.path == path);
     let (note, color) = if !name.trim().is_empty() && path.exists() && !mine {
         (
             "A playlist with this name exists: saving replaces it.",
@@ -1397,6 +1342,7 @@ mod tests {
             queue: &queue,
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
+            playlist: None,
         };
         let key = |app: &mut App, code| {
             app.on_key(KeyEvent::from(code), &ctx).unwrap();
@@ -1605,6 +1551,7 @@ mod tests {
             queue: &[],
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
+            playlist: None,
         };
         let keys = |app: &mut App, text: &str| {
             for c in text.chars() {

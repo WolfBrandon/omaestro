@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::connect::{self, SpotifyStep, YouTubeStep};
 use crate::library::scan::{Progress, Summary};
 use crate::library::{Db, Source, Track};
-use crate::player::{AudioDevice, Output};
+use crate::player::{AudioDevice, Named, Output};
 use crate::playlist::{self, Saved};
 use crate::search::{self, Found, Search};
 use crate::settings::{self, Facts, Settings};
@@ -42,8 +42,6 @@ const SEARCH_PAUSE: Duration = Duration::from_millis(350);
 #[derive(Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Action {
-    /// Replace the queue with these tracks and play from the index.
-    Play(Vec<Track>, usize),
     /// Play this song now, after the one playing.
     PlayNow(Track),
     Enqueue(Vec<Track>),
@@ -125,6 +123,8 @@ pub struct Ctx<'a> {
     pub queue: &'a [Track],
     pub devices: &'a [AudioDevice],
     pub output: &'a Output,
+    /// The saved playlist the queue holds, if any.
+    pub playlist: Option<&'a Named>,
 }
 
 /// A place music can play, as the output picker lists it: an mpv device name on this
@@ -315,15 +315,6 @@ fn fraction(area: Rect, x: u16) -> f64 {
     (x.saturating_sub(area.x) as f64 / span).clamp(0.0, 1.0)
 }
 
-/// The playlist the queue came from or was saved as.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Named {
-    pub name: String,
-    pub path: PathBuf,
-    /// The player's queue revision when it was last saved or opened.
-    pub saved: u64,
-}
-
 /// The browser on its way up or down.
 struct Slide {
     start: Instant,
@@ -349,7 +340,6 @@ pub struct App {
     pub overlay: Option<Overlay>,
     /// Settings, put aside while a sign-in screen opened from it is showing.
     parked_settings: Option<Settings>,
-    pub playlist: Option<Named>,
     /// Where playlists are saved.
     pub playlist_dir: PathBuf,
     /// One line of news for the status bar.
@@ -365,6 +355,10 @@ pub struct App {
     sonos_status: String,
     /// Turns pictures into terminal graphics; found out from the terminal at start.
     pub picker: Option<ratatui_image::picker::Picker>,
+    /// The best picture protocol the terminal said it has, when it was asked at start.
+    pub best_pictures: Option<ratatui_image::picker::ProtocolType>,
+    /// The playing song's cover as a picture, kept to redraw it when the setting changes.
+    cover_image: Option<image::DynamicImage>,
     /// The playing song's cover, ready to draw, and the song it was asked for.
     pub cover: Option<ratatui_image::protocol::Protocol>,
     cover_wanted: Option<String>,
@@ -399,7 +393,6 @@ impl App {
             queue_top: Cell::new(0),
             overlay: None,
             parked_settings: None,
-            playlist: None,
             playlist_dir: playlist::dir(),
             status: String::new(),
             scanning: false,
@@ -410,6 +403,8 @@ impl App {
             sonos: None,
             sonos_status: "Not looked for yet".into(),
             picker: None,
+            best_pictures: None,
+            cover_image: None,
             cover: None,
             cover_wanted: None,
             cover_file: None,
@@ -528,8 +523,9 @@ impl App {
         self.overlay = Some(Overlay::Picker { sel, all: false });
     }
 
-    /// Everything the output picker lists: this computer's devices, then the Sonos groups,
-    /// starred ones first in each, hidden ones only with `all` (and the current one always).
+    /// Everything the output picker lists, in one list: this computer's devices, then the
+    /// Sonos groups, starred ones first, hidden ones only with `all` (and the current one
+    /// always).
     pub fn picker_rows(&self, ctx: &Ctx, all: bool) -> Vec<PickerRow> {
         let favourites = &self.config.outputs.favourites;
         let hidden = &self.config.outputs.hidden;
@@ -561,7 +557,7 @@ impl App {
                 }
             })
             .collect();
-        let mut sonos: Vec<PickerRow> = self
+        let sonos: Vec<PickerRow> = self
             .sonos
             .iter()
             .flat_map(|h| &h.groups)
@@ -584,25 +580,25 @@ impl App {
                 }
             })
             .collect();
-        for list in [&mut here, &mut sonos] {
-            list.sort_by_key(|r| !r.favourite);
-            if !all {
-                list.retain(|r| !r.hidden || r.current);
-            }
-        }
+        // One list: this computer's outputs, then the Sonos groups, starred ones first.
         here.extend(sonos);
+        here.sort_by_key(|r| !r.favourite);
+        if !all {
+            here.retain(|r| !r.hidden || r.current);
+        }
         here
     }
 
     /// Asks for the playing song's cover, if it's a different one from last time.
     pub fn want_cover(&mut self, track: Option<&Track>) {
         let key = track
-            .filter(|_| self.config.appearance.album_art)
+            .filter(|_| self.config.appearance.album_art != crate::config::Art::Off)
             .map(crate::art::key);
         if key == self.cover_wanted {
             return;
         }
         self.cover = None;
+        self.cover_image = None;
         self.cover_file = None;
         self.cover_wanted = key.clone();
         if let (Some(key), Some(track)) = (key, track.cloned()) {
@@ -611,6 +607,39 @@ impl App {
                 let image = crate::art::load(&track);
                 let _ = news.send(News::Cover { key, image });
             });
+        }
+    }
+
+    /// Follows the Album art setting: switches between pictures and coloured blocks, and
+    /// redraws the cover that's showing.
+    pub fn apply_art(&mut self) {
+        use crate::config::Art;
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let art = self.config.appearance.album_art;
+        if art == Art::Off {
+            self.cover = None;
+            return;
+        }
+        let picker = self.picker.get_or_insert_with(Picker::halfblocks);
+        let wanted = match (art, self.best_pictures) {
+            (Art::HiRes, Some(best)) => best,
+            (Art::HiRes, None) => {
+                self.status = "Hi-res covers start next time OMAESTRO opens (it asks the \
+                               terminal then)"
+                    .into();
+                ProtocolType::Halfblocks
+            }
+            _ => ProtocolType::Halfblocks,
+        };
+        if picker.protocol_type() != wanted {
+            picker.set_protocol_type(wanted);
+        }
+        if let Some(img) = &self.cover_image {
+            self.cover = crate::art::encode(picker, img);
+            self.cover_blink = true;
+        } else if self.cover.is_none() {
+            // Off before: fetch the playing song's cover again.
+            self.cover_wanted = None;
         }
     }
 
@@ -755,7 +784,7 @@ impl App {
             self.status = "The queue is empty, so there's nothing to save".into();
             return None;
         }
-        match &self.playlist {
+        match ctx.playlist {
             Some(p) => Some(Action::SavePlaylist(p.name.clone())),
             None => {
                 self.overlay = Some(Overlay::SaveAs(String::new()));
@@ -769,11 +798,7 @@ impl App {
             self.status = "The queue is empty, so there's nothing to save".into();
             return;
         }
-        let name = self
-            .playlist
-            .as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_default();
+        let name = ctx.playlist.map(|p| p.name.clone()).unwrap_or_default();
         self.overlay = Some(Overlay::SaveAs(name));
     }
 
@@ -1173,6 +1198,7 @@ impl App {
                         .as_ref()
                         .and_then(|p| crate::art::encode(p, img));
                     self.cover_file = crate::art::save_for_desktop(img);
+                    self.cover_image = image;
                 }
             }
             News::Sonos(result) => match result {
@@ -1235,8 +1261,13 @@ impl App {
 
     /// Handles one key press. Returns what the main loop should do, if anything.
     pub fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Result<Option<Action>> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return Ok(Some(Action::Quit));
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('c') => return Ok(Some(Action::Quit)),
+                // Undo works everywhere, even while typing in a search box.
+                KeyCode::Char('z') => return Ok(Some(Action::Undo)),
+                _ => {}
+            }
         }
         if self.overlay.is_some() {
             return self.overlay_key(key, ctx);
@@ -1784,6 +1815,7 @@ pub mod tests {
         queue: &[],
         devices: &[],
         output: &crate::player::Output::Here(String::new()),
+        playlist: None,
     };
 
     #[test]
@@ -1841,6 +1873,7 @@ pub mod tests {
             queue: &queue,
             devices: &devices,
             output: &crate::player::Output::Here(String::new()),
+            playlist: None,
         };
 
         press(&mut app, KeyCode::Char('j'), &ctx);
@@ -1902,6 +1935,7 @@ pub mod tests {
             queue: &queue,
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
+            playlist: None,
         };
         assert_eq!(press(&mut app, KeyCode::Char('s'), &ctx), None);
         assert!(matches!(&app.overlay, Some(Overlay::SaveAs(n)) if n.is_empty()));
@@ -1931,15 +1965,23 @@ pub mod tests {
         }
 
         // Once the queue has a name, s saves straight away.
-        app.playlist = Some(Named {
+        let named = Named {
             name: "Mix".into(),
             path,
             saved: 0,
-        });
+        };
+        let ctx = Ctx {
+            playlist: Some(&named),
+            ..ctx
+        };
         assert_eq!(
             press(&mut app, KeyCode::Char('s'), &ctx),
             Some(Action::SavePlaylist("Mix".into()))
         );
+        // Ctrl+Z undoes from anywhere, even with a text box open.
+        app.overlay = Some(Overlay::SaveAs("half typed".into()));
+        let ctrl_z = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(app.on_key(ctrl_z, &ctx).unwrap(), Some(Action::Undo));
     }
 
     fn path_ref(app: &App, name: &str) -> PathBuf {
@@ -2022,6 +2064,7 @@ pub mod tests {
             queue: &queue,
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
+            playlist: None,
         };
         let hits = [
             Hit {
