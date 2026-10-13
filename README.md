@@ -47,7 +47,12 @@ All optional; each one switches something on.
    "OMAESTRO" once in the Spotify app on your phone. Spotify ends sign-ins after six months;
    connect again then.
 2. **YouTube Music** (Settings → Sources → YouTube Music → Connect): pick the browser you're
-   signed in to music.youtube.com with. Your desktop may ask to unlock the keyring.
+   signed in to music.youtube.com with. Chromium, Chrome and Brave list each profile
+   separately (with its account), so pick the profile you're signed in on. Your desktop may ask
+   to unlock the keyring.
+
+The web addresses on the sign-in screens can be clicked to open them, and each has a Copy
+button. In foot, Ctrl+Shift+O also picks out links on screen.
 3. **Sonos**: speakers fetch local files and YouTube songs from OMAESTRO on port 47100. Omarchy's
    firewall blocks that until you allow it for your home network (one time, needs your
    password):

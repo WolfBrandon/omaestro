@@ -2,7 +2,8 @@
 //! Each is a few steps; the slow parts (the browser sign-in, downloading Soloist, reading
 //! browser cookies) run in the background and report back as `News`.
 
-use crate::spotify::soloist;
+use crate::spotify::{self, soloist};
+use crate::youtube::Login;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,14 +29,45 @@ pub enum SpotifyStep {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum YouTubeStep {
-    /// Pick the browser you're signed in to YouTube with.
+    /// Pick the browser (or browser profile) you're signed in to YouTube with.
     Browser {
-        list: Vec<&'static str>,
+        list: Vec<Login>,
         sel: usize,
         error: Option<String>,
     },
-    Connecting(&'static str),
+    /// Reading that browser's login; what it's called.
+    Connecting(String),
     Done(String),
+}
+
+/// A web address shown on a sign-in screen: click it to open it, or Copy it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Link {
+    Dashboard,
+    Redirect,
+    SoloistKeys,
+    /// The Spotify sign-in page itself, while OMAESTRO waits for it.
+    SignIn,
+    YouTube,
+}
+
+pub const DASHBOARD: &str = "https://developer.spotify.com/dashboard";
+pub const YOUTUBE: &str = "https://music.youtube.com";
+
+impl Link {
+    /// The address, given the Spotify step showing (for the sign-in page).
+    pub fn url(self, step: Option<&SpotifyStep>) -> Option<String> {
+        Some(match self {
+            Link::Dashboard => DASHBOARD.to_string(),
+            Link::Redirect => spotify::REDIRECT_URI.to_string(),
+            Link::SoloistKeys => soloist::KEY_PAGE.to_string(),
+            Link::YouTube => YOUTUBE.to_string(),
+            Link::SignIn => match step {
+                Some(SpotifyStep::Waiting { url }) => url.clone(),
+                _ => return None,
+            },
+        })
+    }
 }
 
 /// What a key did on a sign-in screen.
@@ -48,7 +80,7 @@ pub enum Outcome {
     /// Save this Soloist key, then download and pair.
     SoloistKey(String),
     /// Read the login from this browser.
-    YouTubeBrowser(&'static str),
+    YouTubeBrowser(Login),
 }
 
 /// Typing into a field: letters, Backspace, Ctrl+U to clear. Returns true when it was one of
@@ -123,7 +155,7 @@ impl SpotifyStep {
 }
 
 impl YouTubeStep {
-    pub fn start(browsers: Vec<&'static str>) -> YouTubeStep {
+    pub fn start(browsers: Vec<Login>) -> YouTubeStep {
         YouTubeStep::Browser {
             list: browsers,
             sel: 0,
@@ -144,7 +176,7 @@ impl YouTubeStep {
                     Outcome::Stay
                 }
                 KeyCode::Enter => match list.get(*sel) {
-                    Some(browser) => Outcome::YouTubeBrowser(browser),
+                    Some(login) => Outcome::YouTubeBrowser(login.clone()),
                     None => Outcome::Stay,
                 },
                 _ => Outcome::Stay,
@@ -190,13 +222,48 @@ mod tests {
     }
 
     #[test]
+    fn links_give_their_addresses() {
+        assert_eq!(
+            Link::Redirect.url(None).as_deref(),
+            Some("http://127.0.0.1:8898/callback")
+        );
+        assert_eq!(Link::Dashboard.url(None).as_deref(), Some(DASHBOARD));
+        assert_eq!(
+            Link::SignIn.url(None),
+            None,
+            "only while waiting for the sign-in"
+        );
+        let waiting = SpotifyStep::Waiting {
+            url: "https://accounts.spotify.com/authorize?x".into(),
+        };
+        assert_eq!(
+            Link::SignIn.url(Some(&waiting)).as_deref(),
+            Some("https://accounts.spotify.com/authorize?x")
+        );
+    }
+
+    /// Lists this computer's browser logins by yt-dlp name and profile folder only:
+    /// `cargo test live_logins -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_logins() {
+        for login in crate::youtube::logins() {
+            println!("{}", login.arg);
+        }
+    }
+
+    #[test]
     fn youtube_picks_a_browser() {
-        let mut step = YouTubeStep::start(vec!["chromium", "firefox"]);
+        let login = |arg: &str| Login {
+            arg: arg.into(),
+            label: arg.into(),
+        };
+        let mut step = YouTubeStep::start(vec![login("chromium:Profile 1"), login("firefox")]);
         step.on_key(KeyEvent::from(KeyCode::Down));
         step.on_key(KeyEvent::from(KeyCode::Down));
         assert_eq!(
             step.on_key(KeyEvent::from(KeyCode::Enter)),
-            Outcome::YouTubeBrowser("firefox")
+            Outcome::YouTubeBrowser(login("firefox"))
         );
         assert_eq!(
             YouTubeStep::start(vec![]).on_key(KeyEvent::from(KeyCode::Enter)),

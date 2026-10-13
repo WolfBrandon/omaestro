@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::app::{Listing, Open};
-use crate::connect::{SpotifyStep, YouTubeStep};
+use crate::connect::{DASHBOARD, Link, SpotifyStep, YOUTUBE, YouTubeStep};
 use crate::search::{Found, Row as SearchRow, Search};
 use crate::settings::{self, Facts, SECTIONS, Settings, Value};
 use crate::spotify::{self, soloist};
@@ -463,6 +463,35 @@ fn numbered(buf: &mut Buffer, clip: Rect, x: u16, y: u16, n: &str, text: &str, t
     paragraph(buf, clip, x + 4, y, text, fg(t.light))
 }
 
+/// A web address you can click to open, with a Copy button after it. Shown in full where it
+/// fits, so the terminal's own link finder (Ctrl+Shift+O in foot) can use it too.
+#[allow(clippy::too_many_arguments)]
+fn link_row(
+    buf: &mut Buffer,
+    clip: Rect,
+    x: u16,
+    y: u16,
+    url: &str,
+    link: Link,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) -> u16 {
+    let room = clip.right().saturating_sub(x + 12);
+    let shown = fit(url, room);
+    let end = put(
+        buf,
+        clip,
+        x,
+        y,
+        &shown,
+        fg(t.accent).add_modifier(Modifier::UNDERLINED),
+    );
+    hit(Rect::new(x, y, end - x, 1), Target::Link(link));
+    let copy = pill(buf, clip, end + 2, y, "Copy", t);
+    hit(copy, Target::Copy(link));
+    y + 1
+}
+
 pub(super) fn draw_spotify(
     buf: &mut Buffer,
     screen: Rect,
@@ -470,7 +499,7 @@ pub(super) fn draw_spotify(
     t: &Theme,
     hit: &mut impl FnMut(Rect, Target),
 ) {
-    let r = centred(screen, 80, 22);
+    let r = centred(screen, 80, 24);
     let inner = popup(buf, r, "CONNECT SPOTIFY", t, hit);
     let x = inner.x + 2;
     let mut y = inner.y + 1;
@@ -486,9 +515,10 @@ pub(super) fn draw_spotify(
                 x,
                 y,
                 "1",
-                "Sign in at developer.spotify.com/dashboard with your Premium account.",
+                "Sign in to the Spotify developer dashboard with your Premium account:",
                 t,
             );
+            y = link_row(buf, inner, x + 4, y, DASHBOARD, Link::Dashboard, t, hit);
             y = numbered(
                 buf,
                 inner,
@@ -498,12 +528,21 @@ pub(super) fn draw_spotify(
                 "Create an app (any name, e.g. OMAESTRO). Tick \"Web API\". As the Redirect URI, add exactly:",
                 t,
             );
-            put(buf, inner, x + 4, y, spotify::REDIRECT_URI, bold(t.bright));
+            y = link_row(
+                buf,
+                inner,
+                x + 4,
+                y,
+                spotify::REDIRECT_URI,
+                Link::Redirect,
+                t,
+                hit,
+            );
             y = numbered(
                 buf,
                 inner,
                 x,
-                y + 2,
+                y + 1,
                 "3",
                 "Open the app's settings, copy its Client ID, paste it here (Ctrl+Shift+V) and press Enter. Your browser opens to sign in.",
                 t,
@@ -516,7 +555,11 @@ pub(super) fn draw_spotify(
                 t,
             );
             error(buf, y + 3, e);
-            &[("⏎", "connect"), ("Esc", "cancel")]
+            &[
+                ("⏎", "connect"),
+                ("click", "a link to open it"),
+                ("Esc", "cancel"),
+            ]
         }
         SpotifyStep::Waiting { url } => {
             y = paragraph(
@@ -532,11 +575,11 @@ pub(super) fn draw_spotify(
                 inner,
                 x,
                 y + 1,
-                "If no browser opened, open this address yourself (Shift+drag selects it):",
+                "If no browser opened, open the page from here:",
                 fg(t.dim),
             );
-            paragraph(buf, inner, x, y + 1, url, fg(t.fg));
-            &[("Esc", "cancel")]
+            link_row(buf, inner, x, y, url, Link::SignIn, t, hit);
+            &[("click", "the link to open it"), ("Esc", "cancel")]
         }
         SpotifyStep::Playback { input, error: e } => {
             y = paragraph(
@@ -553,11 +596,18 @@ pub(super) fn draw_spotify(
                 x,
                 y + 1,
                 "1",
-                &format!(
-                    "Get an API key at {} (Premium accounts can).",
-                    soloist::KEY_PAGE
-                ),
+                "Get an API key here (Premium accounts can):",
                 t,
+            );
+            y = link_row(
+                buf,
+                inner,
+                x + 4,
+                y,
+                soloist::KEY_PAGE,
+                Link::SoloistKeys,
+                t,
+                hit,
             );
             y = numbered(
                 buf,
@@ -576,7 +626,11 @@ pub(super) fn draw_spotify(
                 t,
             );
             error(buf, y + 3, e);
-            &[("⏎", "set up"), ("Esc", "later")]
+            &[
+                ("⏎", "set up"),
+                ("click", "a link to open it"),
+                ("Esc", "later"),
+            ]
         }
         SpotifyStep::SettingUp(message) => {
             y = paragraph(buf, inner, x, y, message, bold(t.bright));
@@ -606,7 +660,11 @@ pub(super) fn draw_youtube(
     t: &Theme,
     hit: &mut impl FnMut(Rect, Target),
 ) {
-    let r = centred(screen, 76, 20);
+    let rows = match step {
+        YouTubeStep::Browser { list, .. } => list.len() as u16,
+        _ => 0,
+    };
+    let r = centred(screen, 80, (rows + 16).max(18));
     let inner = popup(buf, r, "CONNECT YOUTUBE MUSIC", t, hit);
     let x = inner.x + 2;
     let mut y = inner.y + 1;
@@ -617,15 +675,16 @@ pub(super) fn draw_youtube(
                 inner,
                 x,
                 y,
-                "OMAESTRO signs in with your browser's YouTube login: yt-dlp copies its YouTube cookies into a file only you can read. Sign in at music.youtube.com in that browser first.",
+                "OMAESTRO signs in with your browser's YouTube login: yt-dlp copies its YouTube cookies into a file only you can read. Sign in to YouTube Music in that browser first:",
                 fg(t.light),
             );
+            y = link_row(buf, inner, x, y, YOUTUBE, Link::YouTube, t, hit);
             y = paragraph(
                 buf,
                 inner,
                 x,
                 y + 1,
-                "Which browser are you signed in with?",
+                "Which browser, and which profile, are you signed in with?",
                 bold(t.dim),
             );
             if list.is_empty() {
@@ -638,8 +697,8 @@ pub(super) fn draw_youtube(
                     fg(t.red),
                 );
             }
-            for (i, browser) in list.iter().enumerate() {
-                let row = Rect::new(x, y, 30, 1);
+            for (i, login) in list.iter().enumerate() {
+                let row = Rect::new(x, y, inner.width.saturating_sub(4), 1);
                 hit(row, Target::Browser(i));
                 if i == *sel {
                     fill(buf, row, Style::new().bg(t.selection));
@@ -649,7 +708,14 @@ pub(super) fn draw_youtube(
                 } else {
                     fg(t.light)
                 };
-                put(buf, inner, x + 2, y, browser, style);
+                put(
+                    buf,
+                    inner,
+                    x + 2,
+                    y,
+                    &fit(&login.label, row.width.saturating_sub(3)),
+                    style,
+                );
                 y += 1;
             }
             if let Some(e) = error {
@@ -663,7 +729,7 @@ pub(super) fn draw_youtube(
                 inner,
                 x,
                 y,
-                &format!("Reading {browser}'s YouTube login…"),
+                &format!("Reading the YouTube login from {browser}…"),
                 bold(t.bright),
             );
             paragraph(

@@ -65,6 +65,24 @@ pub fn open_in_browser(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Puts text on the clipboard (`wl-copy`, Wayland's clipboard tool).
+pub fn copy_to_clipboard(text: &str) -> Result<()> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("copying with wl-copy")?;
+    child
+        .stdin
+        .take()
+        .context("no input to wl-copy")?
+        .write_all(text.as_bytes())?;
+    child.wait()?;
+    Ok(())
+}
+
 /// Seconds since 1970, for token expiry times.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()

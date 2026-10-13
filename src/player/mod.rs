@@ -1119,7 +1119,10 @@ mod tests {
             .unwrap();
         assert_eq!(player.ticket, ticket, "no new song started");
         assert_eq!(player.current_index(), Some(1));
-        assert_eq!(player.output, Output::Here("pipewire/alsa_output.usb-Schiit".into()));
+        assert_eq!(
+            player.output,
+            Output::Here("pipewire/alsa_output.usb-Schiit".into())
+        );
     }
 
     fn run_until(

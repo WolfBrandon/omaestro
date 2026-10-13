@@ -1622,7 +1622,7 @@ mod tests {
             }
             "youtube" => {
                 app.overlay = Some(crate::app::Overlay::YouTube(
-                    crate::connect::YouTubeStep::start(crate::youtube::installed_browsers()),
+                    crate::connect::YouTubeStep::start(crate::youtube::logins()),
                 ))
             }
             "open" => keys(&mut app, "O"),

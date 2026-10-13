@@ -14,6 +14,7 @@ use crate::secrets;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -41,22 +42,100 @@ pub fn sign_out() {
     secrets::forget(COOKIES);
 }
 
-/// The browsers on this computer that yt-dlp could read a login from.
-pub fn installed_browsers() -> Vec<&'static str> {
-    let programs: &[(&str, &[&str])] = &[
-        ("chromium", &["chromium"]),
-        ("chrome", &["google-chrome-stable", "google-chrome"]),
-        ("brave", &["brave", "brave-browser"]),
-        ("firefox", &["firefox"]),
-        ("vivaldi", &["vivaldi-stable", "vivaldi"]),
-        ("edge", &["microsoft-edge-stable"]),
-        ("opera", &["opera"]),
-    ];
-    programs
-        .iter()
-        .filter(|(_, bins)| bins.iter().any(|b| which(b)))
-        .map(|(name, _)| *name)
-        .collect()
+/// A browser login yt-dlp can read: one per browser, or one per profile for Chromium-style
+/// browsers, which keep a separate login in each profile.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Login {
+    /// What yt-dlp's `--cookies-from-browser` takes: "firefox" or "chromium:Profile 1".
+    pub arg: String,
+    /// What the list shows: "Chromium · Personal · someone@gmail.com".
+    pub label: String,
+}
+
+/// Browsers yt-dlp can read: its name for them, the programs that mean it's installed, the
+/// name to show, and (for Chromium-style ones) the folder that lists their profiles.
+const BROWSERS: &[(&str, &[&str], &str, &str)] = &[
+    ("chromium", &["chromium"], "Chromium", ".config/chromium"),
+    (
+        "chrome",
+        &["google-chrome-stable", "google-chrome"],
+        "Chrome",
+        ".config/google-chrome",
+    ),
+    (
+        "brave",
+        &["brave", "brave-browser"],
+        "Brave",
+        ".config/BraveSoftware/Brave-Browser",
+    ),
+    ("firefox", &["firefox"], "Firefox", ""),
+    (
+        "vivaldi",
+        &["vivaldi-stable", "vivaldi"],
+        "Vivaldi",
+        ".config/vivaldi",
+    ),
+    (
+        "edge",
+        &["microsoft-edge-stable"],
+        "Edge",
+        ".config/microsoft-edge",
+    ),
+    ("opera", &["opera"], "Opera", ""),
+];
+
+/// Every browser login on this computer that yt-dlp could read.
+pub fn logins() -> Vec<Login> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for (name, programs, shown, dir) in BROWSERS {
+        if !programs.iter().any(|p| which(p)) {
+            continue;
+        }
+        let profiles = if dir.is_empty() {
+            Vec::new()
+        } else {
+            std::fs::read_to_string(home.join(dir).join("Local State"))
+                .map(|text| chromium_profiles(&text))
+                .unwrap_or_default()
+        };
+        if profiles.is_empty() {
+            out.push(Login {
+                arg: name.to_string(),
+                label: shown.to_string(),
+            });
+        }
+        for (folder, label) in profiles {
+            out.push(Login {
+                arg: format!("{name}:{folder}"),
+                label: format!("{shown} · {label}"),
+            });
+        }
+    }
+    out
+}
+
+/// The profiles listed in a Chromium "Local State" file: (folder, "name · account"), the
+/// default one first.
+fn chromium_profiles(local_state: &str) -> Vec<(String, String)> {
+    let v: Value = serde_json::from_str(local_state).unwrap_or_default();
+    let mut profiles: Vec<(String, String)> = v["profile"]["info_cache"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(folder, info)| {
+            let name = info["name"].as_str().unwrap_or(folder);
+            let label = match info["user_name"].as_str().filter(|u| !u.is_empty()) {
+                Some(account) => format!("{name} · {account}"),
+                None => name.to_string(),
+            };
+            (folder.clone(), label)
+        })
+        .collect();
+    profiles.sort_by_key(|(folder, _)| (folder != "Default", folder.clone()));
+    profiles
 }
 
 fn which(program: &str) -> bool {
@@ -602,6 +681,24 @@ mod tests {
         assert_eq!(first.album, "No Rain, No Flowers");
         assert_eq!(first.duration_ms, 218_000);
         assert!(first.art_url.starts_with("https://"));
+    }
+
+    #[test]
+    fn lists_each_chromium_profile() {
+        let state = r#"{"profile":{"info_cache":{
+            "Profile 1":{"name":"Personal","user_name":"me@example.com"},
+            "Default":{"name":"Work","user_name":""}}}}"#;
+        assert_eq!(
+            chromium_profiles(state),
+            [
+                ("Default".to_string(), "Work".to_string()),
+                (
+                    "Profile 1".to_string(),
+                    "Personal · me@example.com".to_string()
+                ),
+            ]
+        );
+        assert!(chromium_profiles("not json").is_empty());
     }
 
     #[test]

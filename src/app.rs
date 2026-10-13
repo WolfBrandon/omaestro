@@ -265,6 +265,9 @@ pub enum Target {
     SettingsButton(usize),
     /// A browser in the YouTube Music sign-in list.
     Browser(usize),
+    /// A web address on a sign-in screen (opens it), and its Copy button.
+    Link(connect::Link),
+    Copy(connect::Link),
     /// The inside of a popup: clicks there don't close it.
     Popup,
 }
@@ -286,6 +289,8 @@ impl Target {
                 | Target::SettingsChoice(..)
                 | Target::SettingsButton(_)
                 | Target::Browser(_)
+                | Target::Link(_)
+                | Target::Copy(_)
         )
     }
 }
@@ -955,7 +960,7 @@ impl App {
         self.park_settings();
         self.overlay = Some(match source {
             Source::Spotify => Overlay::Spotify(SpotifyStep::start(self.spotify.is_some())),
-            _ => Overlay::YouTube(YouTubeStep::start(youtube::installed_browsers())),
+            _ => Overlay::YouTube(YouTubeStep::start(youtube::logins())),
         });
     }
 
@@ -1060,11 +1065,11 @@ impl App {
                     }))
                 }
             },
-            O::YouTubeBrowser(browser) => {
-                self.overlay = Some(Overlay::YouTube(YouTubeStep::Connecting(browser)));
+            O::YouTubeBrowser(login) => {
+                self.overlay = Some(Overlay::YouTube(YouTubeStep::Connecting(login.label)));
                 let news = self.news.clone();
                 std::thread::spawn(move || {
-                    let result = youtube::connect(browser).map_err(|e| format!("{e:#}"));
+                    let result = youtube::connect(&login.arg).map_err(|e| format!("{e:#}"));
                     let _ = news.send(News::YouTubeSignedIn(result));
                 });
             }
@@ -1127,7 +1132,7 @@ impl App {
                 Err(e) => {
                     if let Some(Overlay::YouTube(step)) = &mut self.overlay {
                         *step = YouTubeStep::Browser {
-                            list: youtube::installed_browsers(),
+                            list: youtube::logins(),
                             sel: 0,
                             error: Some(e),
                         };
@@ -1600,9 +1605,27 @@ impl App {
                     &mut self.overlay
                 {
                     *sel = i;
-                    if double && let Some(browser) = list.get(i).copied() {
-                        self.connect_outcome(connect::Outcome::YouTubeBrowser(browser));
+                    if double && let Some(login) = list.get(i).cloned() {
+                        self.connect_outcome(connect::Outcome::YouTubeBrowser(login));
                     }
+                }
+                None
+            }
+            Target::Link(link) | Target::Copy(link) => {
+                let step = match &self.overlay {
+                    Some(Overlay::Spotify(step)) => Some(step),
+                    _ => None,
+                };
+                if let Some(url) = link.url(step) {
+                    let copy = matches!(target, Target::Copy(_));
+                    self.status = match (copy, copy && secrets::copy_to_clipboard(&url).is_ok()) {
+                        (true, true) => "Copied to the clipboard".into(),
+                        (true, false) => format!("Couldn't copy; the address is {url}"),
+                        (false, _) => match secrets::open_in_browser(&url) {
+                            Ok(()) => "Opened in your browser".into(),
+                            Err(e) => format!("{e:#}"),
+                        },
+                    };
                 }
                 None
             }
