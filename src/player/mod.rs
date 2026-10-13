@@ -730,6 +730,17 @@ impl Player {
         match (self.engine, &self.output) {
             (Engine::Mpv, Output::Here(_)) => Some(Target::Stream("omaestro".into())),
             (Engine::Soloist, Output::Here(device)) => Some(Target::from_mpv_device(device)),
+            // On Sonos: a silent copy of the same file, once the speaker is actually playing.
+            // Spotify there has no file here to copy.
+            (Engine::Sonos, _) if self.anchor.is_some() => {
+                let track = self.current()?;
+                let file = match track.source {
+                    Source::Local => std::path::PathBuf::from(&track.path),
+                    Source::YouTube => crate::sonos::server::youtube_file(&track.uri),
+                    Source::Spotify => return None,
+                };
+                file.is_file().then_some(Target::File(file))
+            }
             _ => None,
         }
     }

@@ -321,6 +321,8 @@ fn event_loop(
     // The visualizer's capture, which target it listens to, and when it last tried to start.
     let mut vis: Option<(String, visualizer::Visualizer)> = None;
     let mut vis_tried = Instant::now() - Duration::from_secs(1);
+    // For a silent copy (Sonos): where in the song it started and when, to keep it in step.
+    let mut vis_clock: Option<(f64, Instant)> = None;
     loop {
         // Follow Omarchy theme switches; checking a file's date every 2 s costs nothing.
         if theme_checked.elapsed() >= Duration::from_secs(2) {
@@ -352,15 +354,23 @@ fn event_loop(
             }
             Some(target) => {
                 let key = format!("{target:?}");
+                let copy = matches!(target, visualizer::Target::File(_));
+                // A silent copy drifting from the speaker (a seek, a hiccup) starts again in step.
+                let drifted = copy
+                    && vis_clock.is_some_and(|(at, since)| {
+                        (at + since.elapsed().as_secs_f64() - player.status.position).abs() > 0.75
+                    });
                 let stale = match &vis {
-                    Some((k, v)) => *k != key || !v.is_alive(),
+                    Some((k, v)) => *k != key || !v.is_alive() || drifted,
                     None => true,
                 };
                 if stale && vis_tried.elapsed() > Duration::from_millis(500) {
                     vis_tried = Instant::now();
-                    vis = visualizer::Visualizer::start(target, 32)
+                    let start = player.status.position;
+                    vis = visualizer::Visualizer::start(target, 32, start)
                         .ok()
                         .map(|v| (key, v));
+                    vis_clock = copy.then(|| (start, Instant::now()));
                 }
                 if let Some((_, v)) = &vis {
                     app.bands = v.bands();

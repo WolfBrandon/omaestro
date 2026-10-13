@@ -271,7 +271,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             Id::Visualizer,
             on_off(config.appearance.visualizer),
         )
-        .note("hidden while playing on Sonos"),
+        .note("on Sonos too, except Spotify"),
     );
     // Behaviour
     rows.push(

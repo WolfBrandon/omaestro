@@ -251,11 +251,16 @@ pub fn prepare_local(track: &Track) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// Where a YouTube Music song is kept once downloaded for Sonos.
+pub fn youtube_file(video_id: &str) -> PathBuf {
+    cache_dir().join(format!("yt-{video_id}.m4a"))
+}
+
 /// A YouTube Music song as an AAC file in the cache, for Sonos. Downloads it the first time.
 pub fn prepare_youtube(video_id: &str, browser: Option<&str>) -> Result<PathBuf> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;
-    let out = dir.join(format!("yt-{video_id}.m4a"));
+    let out = youtube_file(video_id);
     if out.is_file() {
         return Ok(out);
     }

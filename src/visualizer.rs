@@ -5,9 +5,14 @@
 //! is ever written to disk. It listens to mpv's own output only (the "omaestro" stream), or for
 //! Spotify to the monitor of the device it plays on. `node.dont-fallback` makes sure it never
 //! falls back to a microphone when that target isn't there; it just stops instead.
+//!
+//! On Sonos the sound never passes through this computer, so the bars come from a silent copy
+//! instead: ffmpeg decodes the same file at playing speed from where the speaker is, straight
+//! into the analysis. Nothing of it reaches any speaker.
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -33,6 +38,8 @@ pub enum Target {
     /// A playback stream node, e.g. mpv's "omaestro" (= --audio-client-name).
     /// Only exists while mpv has audio open: pw-record exits when it goes away.
     Stream(String),
+    /// A song playing somewhere else (Sonos): decode this file silently, in step with it.
+    File(PathBuf),
 }
 
 impl Target {
@@ -76,6 +83,7 @@ fn spawn_pw_record(target: &Target) -> io::Result<Child> {
             "{ node.dont-fallback=true node.passive=true node.name=omaestro-vis }",
             Some(n),
         ),
+        Target::File(_) => return Err(io::Error::other("a file isn't captured")),
     };
     let mut cmd = Command::new("pw-record");
     cmd.args([
@@ -98,9 +106,28 @@ fn spawn_pw_record(target: &Target) -> io::Result<Child> {
         .spawn()
 }
 
+/// Decodes `path` from `start` seconds in at playing speed (`-re`), as the same raw stereo
+/// 48 kHz samples pw-record gives, so the analysis can't tell the difference.
+fn spawn_ffmpeg(path: &Path, start: f64) -> io::Result<Child> {
+    Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-re", "-ss"])
+        .arg(format!("{:.2}", start.max(0.0)))
+        .arg("-i")
+        .arg(path)
+        .args(["-vn", "-ac", "2", "-ar", "48000", "-f", "f32le", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
 impl Visualizer {
-    pub fn start(target: Target, n_bands: usize) -> io::Result<Visualizer> {
-        let mut child = spawn_pw_record(&target)?;
+    /// Starts listening. `start` is where in the song to begin, for a `File` target.
+    pub fn start(target: Target, n_bands: usize, start: f64) -> io::Result<Visualizer> {
+        let mut child = match &target {
+            Target::File(path) => spawn_ffmpeg(path, start)?,
+            _ => spawn_pw_record(&target)?,
+        };
         let stdout = child.stdout.take().expect("piped stdout");
         let shared = Arc::new(Mutex::new(Shared {
             bands: vec![0.0; n_bands],
@@ -247,5 +274,54 @@ impl Analyzer {
             *o += (v - *o) * k;
         }
         &self.out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, have};
+    use std::time::Duration;
+
+    /// A 1 kHz tone decoded silently from a file lights up the band around 1 kHz most.
+    #[test]
+    fn a_silent_copy_of_a_file_drives_the_bars() {
+        if !have("ffmpeg") {
+            eprintln!("skipping: needs ffmpeg");
+            return;
+        }
+        let tmp = TempDir::new("vis-file");
+        let tone = tmp.0.join("tone.flac");
+        let ok = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:duration=4",
+            ])
+            .arg(&tone)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let vis = Visualizer::start(Target::File(tone), 24, 1.0).unwrap();
+        std::thread::sleep(Duration::from_millis(700));
+        let bands = vis.bands();
+        let loudest = (0..bands.len())
+            .max_by(|&a, &b| bands[a].total_cmp(&bands[b]))
+            .unwrap();
+        let (lo, hi) = band_bins(24)[loudest];
+        let hz = |bin: usize| bin as f32 * RATE as f32 / FFT_SIZE as f32;
+        assert!(bands[loudest] > 0.5, "{bands:?}");
+        assert!(
+            hz(lo) <= 1050.0 && hz(hi) >= 950.0,
+            "loudest band {}–{} Hz",
+            hz(lo),
+            hz(hi)
+        );
+        assert!(vis.is_alive());
     }
 }

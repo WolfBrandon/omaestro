@@ -723,6 +723,12 @@ fn draw_visualizer(buf: &mut Buffer, r: Rect, app: &App, player: &Player, t: &Th
     }
     let note = if !app.config.appearance.visualizer {
         "Off (Settings → Appearance)"
+    } else if matches!(player.output, crate::player::Output::Sonos(_))
+        && player
+            .current()
+            .is_some_and(|t| t.source == crate::library::Source::Spotify)
+    {
+        "Spotify plays on the speaker itself: nothing to show"
     } else if matches!(player.output, crate::player::Output::Sonos(_)) {
         "Playing on Sonos"
     } else {
