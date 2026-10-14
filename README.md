@@ -20,9 +20,9 @@ designed in OTIS (project "Omaestro").
   **tray icon**, and **minimize** (`m`) into a Hyprland scratchpad.
 - Mouse and keyboard both work everywhere.
 
-What hasn't been tried on the real thing yet: Spotify playback (needs your Spotify app and
-Soloist key), playing on Sonos (needs the firewall line below), and minimizing (needs
-OMAESTRO in its own window). See "First-time setup".
+Not yet confirmed on the real thing: Spotify playback on this computer (through Soloist),
+the visualizer while playing on Sonos, and minimizing (`m`) from the launcher's window.
+Playing local files on Sonos works (needs the firewall line in "First-time setup").
 
 ## Install it as an app
 
