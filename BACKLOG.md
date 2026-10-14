@@ -4,31 +4,35 @@ Everything here is in 1.0.0. Until it's all done, OMAESTRO stays at 0.9.x: each 
 the next 0.9 version, and when the list is empty, that release is 1.0.0. Done items move to
 [CHANGELOG.md](CHANGELOG.md).
 
+In the order they'll be built:
+
+- [ ] **Connection status**: a dot and a word for each source.
+- [ ] **File Info**: everything about a song, in a pop-up.
+- [ ] **Update in place**: switch to a new version without closing and reopening.
+- [ ] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
+  ListenBrainz.
+- [ ] **Sort by popularity**: an artist's songs, most popular first.
+- [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.
-- **Library and listening**
-  - [ ] **File Info**: everything about a song, in a pop-up.
-  - [ ] **Sort by popularity**: an artist's songs, most popular first.
-  - [ ] **Track plays**: play counts and recently played, and maybe scrobbling.
-- **Sound and sources**
-  - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
-  - [ ] **Connection status**: a dot and a word for each source.
-- **Living with it**
-  - [ ] **Update in place**: switch to a new version without closing and reopening.
 
 ## Taskbar companion for Omarchy
 
-A module for Omarchy's bar (Waybar) to go with the tray icon:
-- **Shows** what's playing, and where: title · artist, and the G560, a Sonos room, and so on.
-- **Click** to bring OMAESTRO back (`omaestro launch`).
-- **Scroll** for volume; middle-click or right-click to play/pause or skip.
-- **Builds on** what's already there: MPRIS for the controls, plus a small `omaestro bar`
-  command printing Waybar's JSON when something changes.
-- **Setup:** `install.sh` could offer to add it to the bar's config, backing that up first.
+A plugin for Omarchy's shell (Quickshell, the same kind as the `brandon.*` plugins), in the
+bar's right side, just before the tray:
+- **The widget:** what's playing (title · artist) and a play/pause button.
+- **Click:** a panel with the cover, controls, position, volume, and the output picker (this
+  computer's outputs and the Sonos rooms).
+- **Right-click:** brings OMAESTRO's window back.
+- **How it talks to OMAESTRO:** the shell's media service (MPRIS) for the song and controls.
+  For what MPRIS can't do (the outputs, and switching them), `omaestro ctl …` talks to the
+  running OMAESTRO over a small local socket.
+- **Setup:** `install.sh` copies the plugin into `~/.config/omarchy/plugins/omaestro` and adds
+  it to the bar's layout in `~/.config/omarchy/shell.json`, backing that up first.
 
 ## File Info
 
-A small pop-up with everything about the highlighted song. It would open from the queue,
-the browser and Search, by key or right-click.
+A small pop-up with everything about a song. It opens with `i` or a right-click, in the queue,
+the browser and Search.
 
 What it would show:
 - **Song:** title, artist, album artist, album (year), track and disc number, genre, length.
@@ -38,33 +42,36 @@ What it would show:
 
 ## Sort by popularity
 
-Order an artist's songs (in the browser and Search) by how popular they are, not by name.
-Where the numbers could come from:
-- **Last.fm:** listener and play counts, and an artist's top songs in order. Needs a free API
-  key.
-- **ListenBrainz:** popularity by MusicBrainz ID, which many tagged files already carry. No
-  key needed.
-- **Spotify's own popularity score,** for Spotify songs.
+- **The toggle:** opening an artist in the browser, a key (and a clickable label) switches
+  their songs between album order and most popular first. The choice is remembered.
+- **Where the numbers come from** is a choice in Settings:
+  - **ListenBrainz:** looks songs up by their MusicBrainz IDs, which tagged files carry; others
+    by name. No key needed.
+  - **Last.fm:** listener and play counts, by artist and title. Uses the Last.fm key from
+    scrobbling.
+  - **Your own play counts:** no outside service.
+- Look-ups are cached in the library index, so sorting stays instant.
 
-Look-ups would be cached in the library index, so sorting stays instant.
+## Track plays and scrobbling
 
-## Track plays, maybe scrobble
-
-Count plays and remember when each song last played, in the library index. That makes
-"most played" and "recently played" lists possible. Optionally send each play to Last.fm
-(sign in once) or ListenBrainz (a token from your profile). A play would count after half
-the song or four minutes, Last.fm's rule.
+- **Play counts and last played** for every song (local, Spotify and YouTube Music), kept in
+  the library index. That gives "most played" and "recently played" lists.
+- **Scrobbling to both Last.fm and ListenBrainz,** each switched on in Settings → Sources:
+  - **Last.fm:** a free API key and secret you create, then sign in once in the browser.
+  - **ListenBrainz:** paste the token from your ListenBrainz profile.
+- **The rules:** a play counts after half the song or four minutes (Last.fm's rule), and
+  "now playing" is sent as a song starts. Plays made offline are sent later.
 
 ## Output rate
 
-Today PipeWire picks the rate, and the Now Playing badge shows "→ 48k" when it resamples.
-OMAESTRO could make each file play at its own rate instead:
-- **Permanently:** let PipeWire switch rates (allowed rates in
-  `~/.config/pipewire/pipewire.conf.d/`).
-- **Only while OMAESTRO plays:** ask PipeWire for the file's rate (`clock.force-rate`) and set
-  it back afterwards.
+**While OMAESTRO plays,** it switches the output to each file's sample rate (`clock.force-rate`),
+and puts it back when playback stops or OMAESTRO quits.
+- **A setting** turns it on or off.
+- **Only rates the device supports** are asked for; otherwise PipeWire resamples as now.
+- **The Now Playing badge** shows when it matches.
+- **Other sound** on that device follows the same rate meanwhile.
 
-Either way it affects everything else playing on that device at the same time.
+Today PipeWire runs everything at 48 kHz, so 44.1 and 96 kHz files are resampled.
 
 ## Connection status
 
@@ -77,7 +84,10 @@ pills:
 
 ## Update in place
 
-When `./install.sh` puts a new version in place, the running OMAESTRO would notice and
-restart itself into it. It would keep the queue, the song and position, the output and the
-volume, with only a moment's gap in the sound. It could wait for a pause, or ask first in the
-status line ("v0.9.5 is ready: press U to switch").
+When `./install.sh` puts a new version in place, a running OMAESTRO notices:
+- **If nothing's playing** (or it's paused), it restarts itself into the new version straight
+  away.
+- **While playing,** the status line says "v0.9.x is ready: U switches", and it switches at
+  the next pause.
+- **Either way** it keeps the queue, the song and position, the output and the volume.
+
