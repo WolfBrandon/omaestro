@@ -39,7 +39,8 @@ fn embedded(path: &Path) -> Option<Vec<u8>> {
         .map(|p| p.data().to_vec())
 }
 
-/// Image names looked for in an album folder, in order (counted in the WolfMusic library).
+/// Image names looked for in an album folder, in order (the most common first, as counted in a
+/// large real library).
 const STEMS: &[&str] = &["cover", "folder", "front", "album", "albumart", "thumb"];
 const EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
 

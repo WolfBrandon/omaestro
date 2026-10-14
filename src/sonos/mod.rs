@@ -209,7 +209,7 @@ fn tags<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
     out
 }
 
-/// "http://192.168.1.145:1400/xml/…" → "192.168.1.145".
+/// "http://192.0.2.145:1400/xml/…" → "192.0.2.145".
 fn ip_of(location: &str) -> Option<String> {
     let host = location.strip_prefix("http://")?.split('/').next()?;
     Some(host.split(':').next()?.to_string())
@@ -809,18 +809,19 @@ pub fn spotify_link(
 mod tests {
     use super::*;
 
-    // The real household (read on 2026-10-13): Office is an Arc with bonded surrounds.
-    const ARC: &str = "RINCON_804AF27532EF01400";
+    // A real household's layout (ids and addresses replaced): Office is an Arc with bonded
+    // surrounds, the kind of setup the safety rule is about.
+    const ARC: &str = "RINCON_000E58A0000101400";
     const OFFICE_BONDED: [&str; 6] = [
-        "RINCON_F0F6C1C7E66401400",
-        "RINCON_F0F6C1C7D71001400",
-        "RINCON_F0F6C1EE17AE01400",
-        "RINCON_804AF2614D1C01400",
-        "RINCON_542A1B5B823801400",
-        "RINCON_542A1B5B851601400",
+        "RINCON_000E58A0000201400",
+        "RINCON_000E58A0000301400",
+        "RINCON_000E58A0000401400",
+        "RINCON_000E58A0000501400",
+        "RINCON_000E58A0000601400",
+        "RINCON_000E58A0000701400",
     ];
-    const DINING: &str = "RINCON_F0F6C1C45D3801400";
-    const KITCHEN: &str = "RINCON_F0F6C1A7F45C01400";
+    const DINING: &str = "RINCON_000E58A0000801400";
+    const KITCHEN: &str = "RINCON_000E58A0000901400";
 
     fn household() -> Household {
         parse_topology(include_str!("test-topology.xml"))
@@ -840,7 +841,7 @@ mod tests {
         );
         let office = h.group(ARC).unwrap();
         assert!(office.home_theater);
-        assert_eq!(office.coordinator.ip, "192.168.1.145");
+        assert_eq!(office.coordinator.ip, "192.0.2.145");
         for uuid in OFFICE_BONDED {
             assert!(h.bonded.contains(uuid), "{uuid} should be known as bonded");
             assert!(!h.ips.contains_key(uuid));
@@ -859,7 +860,7 @@ mod tests {
                 "AVTransport",
                 "SetAVTransportURI",
                 ARC,
-                Some("http://192.168.1.60:47100/t/1")
+                Some("http://192.0.2.60:47100/t/1")
             )
             .is_ok()
         );
@@ -945,12 +946,17 @@ mod tests {
         assert!(permit("AVTransport", "Play", h.to(ARC), None, &[ARC.to_string()]).is_err());
     }
 
-    /// Reads the real household (one read-only request):
-    /// `cargo test live_sonos -- --ignored --nocapture`.
+    /// Reads a real household (read-only requests only):
+    /// `OMAESTRO_SONOS_IP=… cargo test live_sonos -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn live_sonos_household() {
-        let h = discover(&["192.168.1.145".into(), "192.168.1.113".into()]).unwrap();
+        // A speaker's address or two: OMAESTRO_SONOS_IP=192.168.1.20,192.168.1.21
+        let Ok(ips) = std::env::var("OMAESTRO_SONOS_IP") else {
+            return;
+        };
+        let known: Vec<String> = ips.split(',').map(|ip| ip.trim().to_string()).collect();
+        let h = discover(&known).unwrap();
         for g in &h.groups {
             println!(
                 "{} · {} at {}{}",
@@ -965,7 +971,7 @@ mod tests {
             );
         }
         println!("{} bonded speakers", h.bonded.len());
-        assert!(h.group(ARC).is_some());
+        assert!(!h.groups.is_empty());
         // Reads only: the accounts page and the lists (Browse), never anything that plays.
         let sonos = Sonos {
             household: h,

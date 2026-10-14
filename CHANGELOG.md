@@ -3,6 +3,15 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.1 — 2026-10-14
+
+- **Ready for a public release.**
+  - An MIT licence, and a README for people new to OMAESTRO (requirements, install,
+    setup, privacy and safety).
+  - CONTRIBUTING and SECURITY notes, issue templates, and tests run by GitHub on every push.
+- The Sonos test data no longer holds a real household's speaker ids and addresses.
+- The early research notes moved out of the repository.
+
 ## 0.9.0 — 2026-10-14
 
 - **Rename a playlist by clicking its name** in the queue's header, or with `S`. You type the

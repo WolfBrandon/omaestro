@@ -352,8 +352,8 @@ mod tests {
     #[test]
     fn links_compare_loosely() {
         assert!(same_link(
-            "http://192.168.1.60:47100/f/abc.flac",
-            "http://192.168.1.60:47100/f/abc.flac"
+            "http://192.0.2.60:47100/f/abc.flac",
+            "http://192.0.2.60:47100/f/abc.flac"
         ));
         assert!(same_link(
             "x-sonos-spotify:spotify%3atrack%3aABC?sid=9&flags=8224&sn=1",
@@ -365,7 +365,7 @@ mod tests {
         ));
         assert!(!same_link(
             "x-sonos-vli:RINCON_1:2",
-            "http://192.168.1.60:47100/f/abc.flac"
+            "http://192.0.2.60:47100/f/abc.flac"
         ));
     }
 }
