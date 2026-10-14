@@ -3,6 +3,18 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.2 — 2026-10-14
+
+- **Connection status**, the first item on the road to 1.0.0: a coloured dot and a word for
+  each source, in Settings (Sources, and Sonos under Outputs) and on Search's provider pills.
+  - **Local:** the music folders are ready, unreadable, or not answering (a NAS gone away).
+  - **Spotify:** signed in, sign-in expired, can't reach Spotify, or signed in but not set up
+    to play here.
+  - **YouTube Music:** signed in, or the browser login no longer works.
+  - **Sonos:** how many groups' speakers answer.
+  - **How it checks:** in the background, at the start, every two minutes, and when Settings
+    opens. Each check has a time limit, so a hung NAS never holds anything up.
+
 ## 0.9.1 — 2026-10-14
 
 - **Ready for a public release.**

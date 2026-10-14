@@ -73,6 +73,7 @@ pub(super) fn draw_search(
     screen: Rect,
     s: &Search,
     player: &Player,
+    statuses: &crate::status::Statuses,
     t: &Theme,
     hit: &mut impl FnMut(Rect, Target),
 ) {
@@ -131,13 +132,22 @@ pub(super) fn draw_search(
         }
     }
 
-    // The providers: on ones filled, off ones struck through.
+    // The providers: on ones filled, off ones struck through, each with a dot for how it's
+    // doing (once checked).
     let y = inner.y + 3;
     let mut x = inner.x + 3;
     for source in SOURCES {
         let (icon, color) = source_icon(source, t);
+        let health = match source {
+            Source::Local => &statuses.local,
+            Source::Spotify => &statuses.spotify,
+            Source::YouTube => &statuses.youtube,
+        }
+        .as_ref()
+        .map(|st| health_color(st.health, t));
         let start = x;
-        if s.show[index(source)] {
+        let on = s.show[index(source)];
+        if on {
             x = put(
                 buf,
                 inner,
@@ -152,6 +162,10 @@ pub(super) fn draw_search(
             x = put(buf, inner, x, y, &format!(" {icon}"), fg(t.dim));
             let off = fg(t.dim).add_modifier(Modifier::CROSSED_OUT);
             x = put(buf, inner, x, y, &format!(" {} ", source.name()), off);
+        }
+        if let Some(dot) = health {
+            let bg = if on { t.selection } else { t.panel };
+            x = put(buf, inner, x, y, "● ", fg(dot).bg(bg));
         }
         hit(
             Rect::new(start, y, x - start, 1),
@@ -389,6 +403,17 @@ pub(super) fn draw_search(
 }
 
 // ---- Settings ------------------------------------------------------------------------
+
+/// A source's health as a colour: good, worrying, broken, or not set up.
+pub(super) fn health_color(health: crate::status::Health, t: &Theme) -> Color {
+    use crate::status::Health;
+    match health {
+        Health::Good => t.accent,
+        Health::Warning => t.yellow,
+        Health::Bad => t.red,
+        Health::Off => t.dim,
+    }
+}
 
 /// One line of the Settings page: the boxes are drawn a line at a time, so scrolling can cut a
 /// box anywhere and its sides still show.
@@ -740,6 +765,20 @@ fn draw_settings_row(
                 x = put(buf, inside, x, y, &fit(text, room(x)), fg(t.fg));
             }
         }
+    }
+    // How the source is doing: a coloured dot and a word.
+    if let Some(status) = &row.status
+        && room(x + 2) > width(&status.word) + 2
+    {
+        let dot = put(
+            buf,
+            inside,
+            x + 2,
+            y,
+            "● ",
+            fg(health_color(status.health, t)),
+        );
+        x = put(buf, inside, dot, y, &status.word, fg(t.light));
     }
     if !row.note.is_empty() && room(x + 2) > 8 {
         let style = fg(t.dim).add_modifier(Modifier::ITALIC);

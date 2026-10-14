@@ -156,6 +156,11 @@ impl Spotify {
         bail!("Spotify didn't accept the sign-in")
     }
 
+    /// Whether Spotify still accepts the sign-in (a look at your profile).
+    pub fn check(&mut self) -> Result<()> {
+        self.get("/me").map(|_| ())
+    }
+
     /// Songs matching the words, best first (Spotify returns at most 10).
     pub fn search(&mut self, query: &str) -> Result<Vec<Track>> {
         let q = form_encode(query);

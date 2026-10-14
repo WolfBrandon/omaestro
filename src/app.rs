@@ -116,6 +116,8 @@ pub enum News {
         key: String,
         image: Option<image::DynamicImage>,
     },
+    /// How each source is doing.
+    Sources(crate::status::Statuses),
     /// A service's playlist, fetched to go in the queue.
     Imported {
         name: String,
@@ -398,6 +400,11 @@ pub struct App {
     pub themes: Vec<crate::theme::Installed>,
     /// The clock the visualizer's animations run on.
     pub animation_clock: Instant,
+    /// How each source is doing, and when that was last checked (checks run in the
+    /// background).
+    pub statuses: crate::status::Statuses,
+    checking_sources: bool,
+    sources_checked: Option<Instant>,
     pub spotify: Option<Arc<Mutex<Spotify>>>,
     spotify_login: Option<spotify::Login>,
     /// The Sonos household once found, and what to say about it in Settings.
@@ -453,6 +460,9 @@ impl App {
             theme_fixed: false,
             themes: crate::theme::installed(),
             animation_clock: Instant::now(),
+            statuses: crate::status::Statuses::default(),
+            checking_sources: false,
+            sources_checked: None,
             spotify: Spotify::load().map(|s| Arc::new(Mutex::new(s))),
             spotify_login: None,
             sonos: None,
@@ -997,7 +1007,80 @@ impl App {
 
     // ---- settings and signing in -----------------------------------------------------
 
+    /// Time to see how the sources are doing: every two minutes.
+    pub fn sources_due(&self) -> bool {
+        !self.checking_sources
+            && self
+                .sources_checked
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(120))
+    }
+
+    /// Checks every source in the background; the answer comes back as news.
+    pub fn check_sources(&mut self) {
+        use crate::status::{self, Health, Status, Statuses};
+        if self.checking_sources {
+            return;
+        }
+        self.checking_sources = true;
+        let folders = self.config.library_roots();
+        let spotify = self.spotify.clone();
+        let plays_here = soloist::installed() && soloist::key().is_some() && soloist::paired();
+        let youtube = self.youtube_account.is_some().then(|| self.youtube.clone());
+        let speakers: Option<Vec<String>> = self
+            .sonos
+            .as_ref()
+            .map(|h| h.groups.iter().map(|g| g.coordinator.ip.clone()).collect());
+        let news = self.news.clone();
+        std::thread::spawn(move || {
+            let local = status::local(folders);
+            let spotify = match spotify {
+                None => Status::new(Health::Off, "not connected"),
+                Some(client) => status::spotify_from(
+                    status::within(status::LIMIT, move || {
+                        let mut s = client.lock().map_err(|_| "busy".to_string())?;
+                        s.check().map_err(|e| format!("{e:#}"))
+                    }),
+                    plays_here,
+                ),
+            };
+            let youtube = match youtube {
+                None => Status::new(Health::Off, "not connected"),
+                Some(client) => status::youtube_from(status::within(status::LIMIT, move || {
+                    with_youtube(&client, |c| c.account_name())
+                })),
+            };
+            let sonos = match speakers {
+                None => Status::new(Health::Off, "none found yet"),
+                Some(ips) => {
+                    let answering = std::thread::scope(|scope| {
+                        let checks: Vec<_> = ips
+                            .iter()
+                            .map(|ip| {
+                                scope.spawn(move || {
+                                    crate::sonos::reachable(ip, Duration::from_millis(1500))
+                                })
+                            })
+                            .collect();
+                        checks
+                            .into_iter()
+                            .map(|c| c.join().unwrap_or(false))
+                            .filter(|answered| *answered)
+                            .count()
+                    });
+                    status::sonos_from(answering, ips.len())
+                }
+            };
+            let _ = news.send(News::Sources(Statuses {
+                local: Some(local),
+                spotify: Some(spotify),
+                youtube: Some(youtube),
+                sonos: Some(sonos),
+            }));
+        });
+    }
+
     pub fn open_settings(&mut self) {
+        self.check_sources();
         self.themes = crate::theme::installed();
         let rows = settings::rows(&self.config, &self.facts());
         self.overlay = Some(Overlay::Settings(Settings::new(&rows)));
@@ -1023,6 +1106,7 @@ impl App {
             soloist_ready,
             youtube: self.youtube_account.as_ref().map(|a| a.user.clone()),
             sonos: self.sonos_status.clone(),
+            statuses: self.statuses.clone(),
             themes: self.themes.clone(),
             omarchy_theme: crate::theme::omarchy_current(),
         }
@@ -1274,6 +1358,11 @@ impl App {
                 }
                 Err(e) => self.sonos_status = e,
             },
+            News::Sources(statuses) => {
+                self.statuses = statuses;
+                self.checking_sources = false;
+                self.sources_checked = Some(Instant::now());
+            }
             News::Imported {
                 name,
                 source,

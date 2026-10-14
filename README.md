@@ -26,6 +26,8 @@ were designed in [OTIS](https://github.com/WolfBrandon/otis).
   **visualizer** (with animations when there's no sound to read, e.g. Spotify on Sonos),
   **media keys** and MPRIS, a **tray icon**, and **minimize** into a Hyprland scratchpad.
 - **Themes**: follows Omarchy's theme live, or pick any installed Omarchy theme.
+- **Connection status**: a dot and a word for each source (your folders, Spotify, YouTube
+  Music, Sonos) in Settings and Search, checked in the background.
 - Mouse and keyboard work everywhere.
 
 ## Requirements

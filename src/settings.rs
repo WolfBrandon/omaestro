@@ -82,6 +82,8 @@ pub struct Row {
     pub note: String,
     /// A button at the end of the row, if any.
     pub button: Option<&'static str>,
+    /// How the source is doing (a coloured dot and a word), for the sources' rows.
+    pub status: Option<crate::status::Status>,
 }
 
 impl Row {
@@ -93,7 +95,13 @@ impl Row {
             value,
             note: String::new(),
             button: None,
+            status: None,
         }
+    }
+
+    fn status(mut self, status: Option<crate::status::Status>) -> Row {
+        self.status = status;
+        self
     }
 
     fn note(mut self, note: impl Into<String>) -> Row {
@@ -148,6 +156,8 @@ pub struct Facts {
     pub soloist_ready: bool,
     pub youtube: Option<String>,
     pub sonos: String,
+    /// How each source is doing, from the latest background check.
+    pub statuses: crate::status::Statuses,
     /// The Omarchy themes installed, and the one Omarchy is using.
     pub themes: Vec<crate::theme::Installed>,
     pub omarchy_theme: Option<String>,
@@ -236,7 +246,9 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     ));
     // Outputs
     rows.push(
-        Row::new(2, "Sonos", Id::Sonos, Value::Text(facts.sonos.clone())).button("Look again"),
+        Row::new(2, "Sonos", Id::Sonos, Value::Text(facts.sonos.clone()))
+            .button("Look again")
+            .status(facts.statuses.sonos.clone()),
     );
     rows.push(
         Row::new(
@@ -251,8 +263,10 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     let folders = config.library_paths.join(", ");
     rows.push(
         Row::new(3, "Local", Id::Local, Value::Text(folders))
-            .note(format!("{} tracks", group_thousands(facts.tracks))),
+            .note(format!("{} tracks", group_thousands(facts.tracks)))
+            .status(facts.statuses.local.clone()),
     );
+    let spotify = facts.statuses.spotify.clone();
     rows.push(match &facts.spotify {
         Some(user) => Row::new(
             3,
@@ -260,7 +274,8 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             Id::Spotify,
             Value::Text(format!("Connected as {user}")),
         )
-        .button("Sign out"),
+        .button("Sign out")
+        .status(spotify),
         None => Row::new(
             3,
             "Spotify",
@@ -282,6 +297,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             "Set up"
         }),
     );
+    let youtube = facts.statuses.youtube.clone();
     rows.push(match &facts.youtube {
         Some(user) => Row::new(
             3,
@@ -289,7 +305,8 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             Id::YouTube,
             Value::Text(format!("Connected as {user}")),
         )
-        .button("Sign out"),
+        .button("Sign out")
+        .status(youtube),
         None => Row::new(
             3,
             "YouTube Music",
@@ -775,6 +792,35 @@ mod tests {
             panic!()
         };
         assert_eq!(chosen, 0);
+    }
+
+    #[test]
+    fn sources_show_how_theyre_doing() {
+        use crate::status::{Health, Status, Statuses};
+        let facts = Facts {
+            spotify: Some("Me".into()),
+            statuses: Statuses {
+                local: Some(Status::new(Health::Bad, "not answering")),
+                spotify: Some(Status::new(Health::Good, "signed in")),
+                youtube: None,
+                sonos: Some(Status::new(Health::Warning, "1 of 3 groups answering")),
+            },
+            ..Facts::default()
+        };
+        let rows = rows(&Config::default(), &facts);
+        let status = |id: Id| {
+            rows.iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.status.clone())
+                .map(|s| s.word)
+        };
+        assert_eq!(status(Id::Local).as_deref(), Some("not answering"));
+        assert_eq!(status(Id::Spotify).as_deref(), Some("signed in"));
+        assert_eq!(status(Id::YouTube), None, "not connected: nothing to say");
+        assert_eq!(
+            status(Id::Sonos).as_deref(),
+            Some("1 of 3 groups answering")
+        );
     }
 
     #[test]

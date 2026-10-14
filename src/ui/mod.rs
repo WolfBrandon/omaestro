@@ -252,7 +252,9 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
         // Renaming happens in the queue's header.
         Some(Overlay::Rename { .. }) => {}
         Some(Overlay::Open(open)) => screens::draw_open(buf, area, open, t, &mut hit),
-        Some(Overlay::Search) => screens::draw_search(buf, area, &app.search, player, t, &mut hit),
+        Some(Overlay::Search) => {
+            screens::draw_search(buf, area, &app.search, player, &app.statuses, t, &mut hit)
+        }
         Some(Overlay::Settings(s)) => {
             screens::draw_settings(buf, area, s, &app.config, &app.facts(), t, &mut hit)
         }

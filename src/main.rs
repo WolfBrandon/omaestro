@@ -17,6 +17,7 @@ mod session;
 mod settings;
 mod sonos;
 mod spotify;
+mod status;
 #[cfg(test)]
 mod testutil;
 mod theme;
@@ -359,6 +360,10 @@ fn event_loop(
         if now != kept {
             kept = now;
             let _ = session::save(&config::data_dir(), &player.session());
+        }
+        // How the sources are doing, checked in the background every couple of minutes.
+        if app.sources_due() {
+            app.check_sources();
         }
         // A theme picked in Settings applies at once.
         if app.config.appearance.theme != theme_setting {

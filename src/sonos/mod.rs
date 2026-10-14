@@ -397,7 +397,8 @@ pub fn discover(known: &[String]) -> Result<Household> {
     bail!("No Sonos speakers answered on this network")
 }
 
-fn reachable(ip: &str, timeout: Duration) -> bool {
+/// Whether a speaker answers on its port at all (a connection, no request).
+pub fn reachable(ip: &str, timeout: Duration) -> bool {
     ip.parse::<IpAddr>()
         .ok()
         .is_some_and(|ip| TcpStream::connect_timeout(&SocketAddr::new(ip, PORT), timeout).is_ok())

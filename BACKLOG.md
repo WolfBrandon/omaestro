@@ -1,12 +1,12 @@
 # Road to 1.0.0
 
 Everything here is in 1.0.0. Until it's all done, OMAESTRO stays at 0.9.x: each piece ships as
-the next 0.9 version, and when the list is empty, that release is 1.0.0. Done items move to
-[CHANGELOG.md](CHANGELOG.md).
+the next 0.9 version, and when the list is all ticked, that release is 1.0.0. Done items are
+ticked here and described in [CHANGELOG.md](CHANGELOG.md).
 
 In the order they'll be built:
 
-- [ ] **Connection status**: a dot and a word for each source.
+- [x] **Connection status**: a dot and a word for each source (0.9.2).
 - [ ] **File Info**: everything about a song, in a pop-up.
 - [ ] **Update in place**: switch to a new version without closing and reopening.
 - [ ] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
@@ -72,15 +72,6 @@ and puts it back when playback stops or OMAESTRO quits.
 - **Other sound** on that device follows the same rate meanwhile.
 
 Today PipeWire runs everything at 48 kHz, so 44.1 and 96 kHz files are resampled.
-
-## Connection status
-
-A coloured dot and a word for each source, in Settings → Sources and on Search's provider
-pills:
-- **Local:** the music folder is mounted, or not.
-- **Spotify:** signed in, sign-in expired, or Soloist not running.
-- **YouTube Music:** signed in, or the browser login no longer works.
-- **Sonos:** speakers reachable, or not.
 
 ## Update in place
 
