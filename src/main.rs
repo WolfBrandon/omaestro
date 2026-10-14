@@ -174,10 +174,9 @@ fn run_player() -> Result<()> {
         DisableBracketedPaste
     );
     ratatui::restore();
-    // Quitting stops the music, wherever it plays; the volume is kept for next time.
-    if matches!(player.output, player::Output::Here(_)) {
-        app.config.playback.volume = player.status.volume.round() as u8;
-    }
+    // Quitting stops the music, wherever it plays; this computer's volume is kept for next
+    // time (not a Sonos speaker's).
+    app.config.playback.volume = player.here_volume().round() as u8;
     let _ = app.config.save();
     player.shut_down();
     result

@@ -151,6 +151,9 @@ pub struct Player {
     soloist_started: bool,
     /// When Soloist was last asked to play our song, and how many times, while it hasn't.
     soloist_asked: Option<(Instant, u8)>,
+    /// The volume on this computer's outputs. While playing on Sonos, the volume shown is the
+    /// speaker's own; coming back, this one returns.
+    here_volume: f64,
     sonos: Option<sonos::SonosPlayer>,
     household: Option<Arc<sonos_api::Sonos>>,
     media_port: u16,
@@ -192,6 +195,7 @@ impl Player {
             soloist_held: false,
             soloist_started: false,
             soloist_asked: None,
+            here_volume: options.volume as f64,
             sonos: None,
             household: None,
             media_port: 47100,
@@ -675,9 +679,10 @@ impl Player {
                 "audio-device",
                 json!(if device.is_empty() { "auto" } else { device }),
             )?;
-            // Back on this computer, the volume is mpv's again.
+            // Back on this computer: its own volume again, not the speaker's.
             if was_sonos {
-                self.mpv.set("volume", json!(self.status.volume))?;
+                self.status.volume = self.here_volume;
+                self.mpv.set("volume", json!(self.here_volume))?;
             }
         }
         self.output = output;
@@ -691,6 +696,11 @@ impl Player {
                 Ok(())
             }
         }
+    }
+
+    /// The volume on this computer's outputs (kept for next time), wherever it's playing now.
+    pub fn here_volume(&self) -> f64 {
+        self.here_volume
     }
 
     /// Stops playing but keeps the queue and its place, so play starts that track again.
@@ -730,6 +740,7 @@ impl Player {
                 }
             }
             Output::Here(_) => {
+                self.here_volume = volume;
                 self.mpv.set("volume", json!(volume))?;
                 if let Some(s) = &self.soloist {
                     s.set_volume(volume as u8);
@@ -998,6 +1009,7 @@ impl Player {
             "volume" if matches!(self.output, Output::Here(_)) => {
                 if let Some(v) = data.as_f64() {
                     self.status.volume = v;
+                    self.here_volume = v;
                 }
             }
             _ => {}
@@ -1246,6 +1258,42 @@ mod tests {
         let error = player.status.last_error.clone().unwrap_or_default();
         assert!(error.contains("didn't start “Ours”"), "{error}");
         assert!(player.status.idle, "the queue had nothing after it");
+    }
+
+    /// Sonos has its own volume. Coming back to this computer brings back this computer's,
+    /// rather than handing Soloist or mpv the speaker's (which went almost silent).
+    #[test]
+    fn each_output_keeps_its_own_volume() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-volume");
+        let (mut player, _rx) = silent(&tmp);
+        player.set_volume(80.0).unwrap();
+        let office = sonos_api::Group {
+            id: "RINCON_1:1".into(),
+            coordinator: sonos_api::Speaker {
+                uuid: "RINCON_1".into(),
+                room: "Office".into(),
+                ip: "192.0.2.1".into(),
+            },
+            rooms: vec!["Office".into()],
+            home_theater: false,
+        };
+        player.set_output(Output::Sonos(office)).unwrap();
+        player
+            .handle(Event::Sonos(sonos::Event::Volume(30)))
+            .unwrap();
+        assert_eq!(player.status.volume, 30.0, "the speaker's own volume");
+        player.set_volume(27.0).unwrap();
+        assert_eq!(
+            player.here_volume(),
+            80.0,
+            "changing Sonos's leaves this computer's"
+        );
+        player.set_output(Output::Here(String::new())).unwrap();
+        assert_eq!(player.status.volume, 80.0, "this computer's again");
     }
 
     #[test]

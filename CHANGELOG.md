@@ -3,6 +3,15 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.7.4 — 2026-10-13
+
+- **Fix: no sound after switching from Sonos back to this computer.**
+  - The cause: while on Sonos, the volume shown is the speaker's, and switching back handed
+    that number to this computer. Soloist plays its volume on a cube curve, so 27% came out
+    at about 2%: effectively silent.
+  - The fix: this computer's volume is now kept separately, and returns when you switch
+    back. It's also the one saved for next time, not a Sonos speaker's.
+
 ## 0.7.3 — 2026-10-13
 
 - **Fix: the visualizer for Spotify played here, and likely the popping.**
