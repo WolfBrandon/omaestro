@@ -38,7 +38,7 @@ pub enum Id {
     Spotify,
     Soloist,
     YouTube,
-    Colours,
+    Theme,
     AlbumArt,
     Visualizer,
     Minimize,
@@ -52,6 +52,13 @@ pub enum Value {
     /// A number changed with ←→.
     Number(u32),
     Text(String),
+    /// Pick one of many, shown one at a time (◂ name ▸): what each is called, what's saved
+    /// for it, and which is chosen.
+    Pick {
+        options: Vec<String>,
+        values: Vec<String>,
+        chosen: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,7 +97,11 @@ impl Row {
 
     /// Rows that can be changed or have a button.
     pub fn active(&self) -> bool {
-        self.button.is_some() || matches!(self.value, Value::Choice(..) | Value::Number(_))
+        self.button.is_some()
+            || matches!(
+                self.value,
+                Value::Choice(..) | Value::Number(_) | Value::Pick { .. }
+            )
     }
 }
 
@@ -104,6 +115,9 @@ pub struct Facts {
     pub soloist_ready: bool,
     pub youtube: Option<String>,
     pub sonos: String,
+    /// The Omarchy themes installed, and the one Omarchy is using.
+    pub themes: Vec<crate::theme::Installed>,
+    pub omarchy_theme: Option<String>,
 }
 
 fn on_off(on: bool) -> Value {
@@ -252,12 +266,37 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         .button("Connect"),
     });
     // Appearance
-    rows.push(Row::new(
-        4,
-        "Colours",
-        Id::Colours,
-        Value::Text("From the Omarchy theme".into()),
-    ));
+    let follow = match &facts.omarchy_theme {
+        Some(name) => format!("Omarchy's theme ({name})"),
+        None => "Omarchy's theme".to_string(),
+    };
+    let mut options = vec![follow];
+    let mut values = vec![crate::theme::FOLLOW.to_string()];
+    for theme in &facts.themes {
+        options.push(if theme.light {
+            format!("{} (light)", theme.name)
+        } else {
+            theme.name.clone()
+        });
+        values.push(theme.slug.clone());
+    }
+    let chosen = values
+        .iter()
+        .position(|v| *v == config.appearance.theme)
+        .unwrap_or(0);
+    rows.push(
+        Row::new(
+            4,
+            "Theme",
+            Id::Theme,
+            Value::Pick {
+                options,
+                values,
+                chosen,
+            },
+        )
+        .note("←→ to try others"),
+    );
     rows.push(Row::new(
         4,
         "Album art",
@@ -420,7 +459,14 @@ impl Settings {
             Value::Choice(options, chosen) => {
                 let n = options.len() as i32;
                 let new = (*chosen as i32 + delta).rem_euclid(n) as usize;
-                self.choose(config, row.id, new)
+                self.choose(config, row, new)
+            }
+            Value::Pick {
+                options, chosen, ..
+            } => {
+                let n = options.len() as i32;
+                let new = (*chosen as i32 + delta).rem_euclid(n) as usize;
+                self.choose(config, row, new)
             }
             Value::Number(n) if row.id == Id::Readers => {
                 config.scan_threads = (*n as i32 + delta).clamp(1, 64) as usize;
@@ -431,9 +477,16 @@ impl Settings {
     }
 
     /// Sets a choice row to option `n` (also used by clicks).
-    pub fn choose(&mut self, config: &mut Config, id: Id, n: usize) -> Outcome {
+    pub fn choose(&mut self, config: &mut Config, row: &Row, n: usize) -> Outcome {
+        if let (Id::Theme, Value::Pick { values, .. }) = (row.id, &row.value) {
+            let Some(theme) = values.get(n) else {
+                return Outcome::Stay;
+            };
+            config.appearance.theme = theme.clone();
+            return Outcome::Saved;
+        }
         let on = n == 0;
-        match id {
+        match row.id {
             Id::ScanOnLaunch => config.scan_on_launch = on,
             Id::Gapless => config.playback.gapless = on,
             Id::AlbumArt => {
@@ -453,7 +506,7 @@ impl Settings {
         let Some(row) = rows.get(self.sel) else {
             return Outcome::Stay;
         };
-        if let Value::Choice(..) = row.value {
+        if let Value::Choice(..) | Value::Pick { .. } = row.value {
             return self.change(config, rows, 1);
         }
         match (row.id, row.button) {
@@ -533,5 +586,65 @@ mod tests {
             Outcome::Connect(Source::Spotify)
         );
         assert_eq!(press(&mut s, &mut config, KeyCode::Esc), Outcome::Close);
+    }
+
+    #[test]
+    fn picks_a_theme_from_the_installed_ones() {
+        let theme = |slug: &str, light| crate::theme::Installed {
+            slug: slug.into(),
+            name: crate::theme::nice(slug),
+            light,
+            path: std::path::PathBuf::new(),
+        };
+        let facts = Facts {
+            themes: vec![theme("catppuccin-latte", true), theme("tokyo-night", false)],
+            omarchy_theme: Some("Phosphor Wolf".into()),
+            ..Facts::default()
+        };
+        let mut config = Config::default();
+        let mut s = Settings::new(&rows(&config, &facts));
+        s.go_to_section(&rows(&config, &facts), 4);
+        let row = |config: &Config| {
+            rows(config, &facts)
+                .into_iter()
+                .find(|r| r.id == Id::Theme)
+                .unwrap()
+        };
+        let Value::Pick {
+            options, chosen, ..
+        } = row(&config).value
+        else {
+            panic!("the theme row picks one of many")
+        };
+        assert_eq!(
+            options,
+            [
+                "Omarchy's theme (Phosphor Wolf)",
+                "Catppuccin Latte (light)",
+                "Tokyo Night"
+            ]
+        );
+        assert_eq!(chosen, 0, "follows Omarchy unless told otherwise");
+
+        // → tries the next theme, saving it; ← from the first goes round to the last.
+        s.sel = rows(&config, &facts)
+            .iter()
+            .position(|r| r.id == Id::Theme)
+            .unwrap();
+        let rows_now = rows(&config, &facts);
+        assert_eq!(s.change(&mut config, &rows_now, 1), Outcome::Saved);
+        assert_eq!(config.appearance.theme, "catppuccin-latte");
+        let rows_now = rows(&config, &facts);
+        s.change(&mut config, &rows_now, -1);
+        assert_eq!(config.appearance.theme, crate::theme::FOLLOW);
+        let rows_now = rows(&config, &facts);
+        s.change(&mut config, &rows_now, -1);
+        assert_eq!(config.appearance.theme, "tokyo-night");
+        // A theme that's gone shows as following Omarchy.
+        config.appearance.theme = "uninstalled".into();
+        let Value::Pick { chosen, .. } = row(&config).value else {
+            panic!()
+        };
+        assert_eq!(chosen, 0);
     }
 }

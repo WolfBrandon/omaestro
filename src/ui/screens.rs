@@ -508,6 +508,25 @@ pub(super) fn draw_settings(
                 x = put(buf, area, x, y, &format!("◂ {n} ▸"), bold(t.bright));
                 x += 2;
             }
+            // One of many: ◂ and ▸ step through them.
+            Value::Pick {
+                options, chosen, ..
+            } => {
+                let count = options.len().max(1);
+                let back = put(buf, area, x, y, "◂ ", fg(t.accent));
+                hit(
+                    Rect::new(x, y, 2, 1),
+                    Target::SettingsChoice(i, (chosen + count - 1) % count),
+                );
+                let name = options.get(*chosen).map_or("", String::as_str);
+                let after = put(buf, area, back, y, name, bold(t.bright));
+                x = put(buf, area, after, y, " ▸", fg(t.accent));
+                hit(
+                    Rect::new(after, y, 2, 1),
+                    Target::SettingsChoice(i, (chosen + 1) % count),
+                );
+                x += 2;
+            }
             Value::Text(text) => {
                 if row.id == settings::Id::AddFolder {
                     if let Some(typed) = &s.adding {

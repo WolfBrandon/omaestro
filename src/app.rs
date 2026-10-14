@@ -379,6 +379,10 @@ pub struct App {
     /// Tracks in the index, for Settings.
     track_count: usize,
     pub theme: Theme,
+    /// The theme was picked in Settings (not Omarchy's), so its background is painted.
+    pub theme_fixed: bool,
+    /// The Omarchy themes installed, for Settings; looked up again when Settings opens.
+    pub themes: Vec<crate::theme::Installed>,
     pub spotify: Option<Arc<Mutex<Spotify>>>,
     spotify_login: Option<spotify::Login>,
     /// The Sonos household once found, and what to say about it in Settings.
@@ -431,6 +435,8 @@ impl App {
             scanning: false,
             track_count: 0,
             theme: Theme::default(),
+            theme_fixed: false,
+            themes: crate::theme::installed(),
             spotify: Spotify::load().map(|s| Arc::new(Mutex::new(s))),
             spotify_login: None,
             sonos: None,
@@ -972,6 +978,7 @@ impl App {
     // ---- settings and signing in -----------------------------------------------------
 
     pub fn open_settings(&mut self) {
+        self.themes = crate::theme::installed();
         let rows = settings::rows(&self.config, &self.facts());
         self.overlay = Some(Overlay::Settings(Settings::new(&rows)));
     }
@@ -996,6 +1003,8 @@ impl App {
             soloist_ready,
             youtube: self.youtube_account.as_ref().map(|a| a.user.clone()),
             sonos: self.sonos_status.clone(),
+            themes: self.themes.clone(),
+            omarchy_theme: crate::theme::omarchy_current(),
         }
     }
 
@@ -1716,12 +1725,10 @@ impl App {
                 };
                 s.sel = i;
                 let outcome = match target {
-                    Target::SettingsChoice(_, n) => {
-                        let id = rows.get(i).map(|r| r.id);
-                        id.map_or(settings::Outcome::Stay, |id| {
-                            s.choose(&mut self.config, id, n)
-                        })
-                    }
+                    Target::SettingsChoice(_, n) => match rows.get(i) {
+                        Some(row) => s.choose(&mut self.config, row, n),
+                        None => settings::Outcome::Stay,
+                    },
                     Target::SettingsButton(_) => s.press(&mut self.config, &rows),
                     _ => settings::Outcome::Stay,
                 };

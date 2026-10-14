@@ -129,7 +129,11 @@ and YouTube Music on and off. Each provider's results get their own box; `Tab` j
 next one. `Enter` plays a song right away (the queue carries on after it), `a` adds it, `A`
 adds everything that provider found. `Esc` or the × closes Search.
 
-Colours come from the current Omarchy theme and follow theme switches while the player is open.
+Colours come from Omarchy's current theme and follow theme switches while the player is open.
+Or pick any installed Omarchy theme for OMAESTRO alone: Settings (`F2`) → Appearance → Theme,
+then `←` `→` (or click ◂ ▸) to try them; each one shows straight away and is saved. A picked
+theme paints its own background, so light ones work in a dark terminal. Everforest and White
+have very faint dim text (headings, times), as they do everywhere.
 
 ## Settings
 
@@ -150,6 +154,7 @@ volume = 100
 [appearance]
 album_art = "hi-res"                    # "hi-res" (real pictures), "lo-res" (coloured blocks) or "off"
 visualizer = true
+theme = "omarchy"                       # Omarchy's theme, or an installed one: "tokyo-night"
 
 [queue]                                 # the queue's columns (set with the mouse or C)
 hidden = []                             # e.g. ["number", "format"]

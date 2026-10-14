@@ -188,6 +188,10 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
     let area = frame.area();
     let a = layout(area, browse);
     let buf = frame.buffer_mut();
+    // A theme picked in Settings brings its own background; Omarchy's is the terminal's.
+    if app.theme_fixed {
+        fill(buf, area, Style::new().bg(t.background).fg(t.fg));
+    }
     let mut hits = Vec::new();
     let mut hit = |area: Rect, target: Target| hits.push(Hit { area, target });
 
@@ -1468,6 +1472,36 @@ mod tests {
             silent: true,
         };
         Player::start(&options, &tmp.0.join("mpv.sock"), tx).unwrap()
+    }
+
+    /// A theme picked in Settings paints its own background (a light one too), so its text is
+    /// readable whatever the terminal's colours; Omarchy's theme leaves the terminal's alone.
+    #[test]
+    fn a_picked_theme_paints_its_background() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("ui-theme");
+        let mut app = crate::app::tests::app(&tmp);
+        let player = silent_player(&tmp);
+        let latte = crate::theme::Theme::from_toml(
+            "background = \"#eff1f5\"\nforeground = \"#4c4f69\"\n\
+             lighter_background = \"#dce0e8\"\nselection = \"#ccd0da\"\n",
+        );
+        app.theme = latte;
+        let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
+        let mut corner = |app: &App| {
+            terminal
+                .draw(|f| {
+                    draw(f, app, &player, 0.0);
+                })
+                .unwrap();
+            terminal.backend().buffer()[(0, 59)].bg
+        };
+        assert_eq!(corner(&app), Color::Reset, "Omarchy's: the terminal's own");
+        app.theme_fixed = true;
+        assert_eq!(corner(&app), latte.background);
     }
 
     /// Draws every state at many sizes, with the browser closed, halfway up and open, so layout

@@ -319,7 +319,8 @@ fn event_loop(
     desktop: &mut Desktop,
 ) -> Result<()> {
     let mut dirty = true;
-    let mut theme_file = ThemeFile::omarchy();
+    let mut theme_setting = app.config.appearance.theme.clone();
+    let mut theme_file = ThemeFile::for_setting(&theme_setting);
     let mut theme_checked = Instant::now() - Duration::from_secs(60);
     let mut last_current = player.current_index();
     let mut hits = Vec::new();
@@ -330,11 +331,18 @@ fn event_loop(
     // For a silent copy (Sonos): where in the song it started and when, to keep it in step.
     let mut vis_clock: Option<(f64, Instant)> = None;
     loop {
+        // A theme picked in Settings applies at once.
+        if app.config.appearance.theme != theme_setting {
+            theme_setting = app.config.appearance.theme.clone();
+            theme_file = ThemeFile::for_setting(&theme_setting);
+            theme_checked = Instant::now() - Duration::from_secs(60);
+        }
         // Follow Omarchy theme switches; checking a file's date every 2 s costs nothing.
         if theme_checked.elapsed() >= Duration::from_secs(2) {
             theme_checked = Instant::now();
             if let Some(theme) = theme_file.changed() {
                 app.theme = theme;
+                app.theme_fixed = theme_file.fixed;
                 dirty = true;
             }
         }

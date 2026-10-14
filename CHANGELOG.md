@@ -3,6 +3,15 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.5.0 — 2026-10-13
+
+- **Themes.** Settings → Appearance → Theme picks any Omarchy theme installed here (Omarchy's
+  own and yours in `~/.config/omarchy/themes`), or keeps following Omarchy's, as before.
+  - `←` `→` or ◂ ▸ try the next one; it shows at once and is saved.
+  - A picked theme paints its own background, so light themes work in a dark terminal.
+- The OTIS design's "Settings (new)" tab is redrawn in the style of Search, with a theme grid.
+  The Settings screen itself is still the old layout until that design is built.
+
 ## 0.4.0 — 2026-10-13
 
 - **Search, redesigned** to the new OTIS tab.

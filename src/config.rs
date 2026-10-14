@@ -42,6 +42,8 @@ pub struct Playback {
 pub struct Appearance {
     pub album_art: Art,
     pub visualizer: bool,
+    /// "omarchy" to follow Omarchy's theme, or an installed theme's folder name.
+    pub theme: String,
 }
 
 /// How the cover is drawn: as a real picture (sixel or the kitty protocol, in terminals that
@@ -140,6 +142,7 @@ impl Default for Appearance {
         Appearance {
             album_art: Art::HiRes,
             visualizer: true,
+            theme: crate::theme::FOLLOW.to_string(),
         }
     }
 }
@@ -247,9 +250,12 @@ mod tests {
         assert_eq!(read(""), Art::HiRes);
         let written = toml::to_string(&Appearance {
             album_art: Art::LoRes,
-            visualizer: true,
+            ..Appearance::default()
         })
         .unwrap();
         assert!(written.contains("album_art = \"lo-res\""), "{written}");
+        // Older settings files have no theme: follow Omarchy's.
+        let old: Appearance = toml::from_str("visualizer = true").unwrap();
+        assert_eq!(old.theme, crate::theme::FOLLOW);
     }
 }
