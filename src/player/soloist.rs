@@ -8,10 +8,11 @@
 use crate::spotify::soloist;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::net::TcpStream;
 use std::process::Child;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tungstenite::{Message, WebSocket};
 
 /// What Soloist reports. Fields are present when the message said something about them.
@@ -76,9 +77,10 @@ pub fn parse(text: &str) -> Option<Event> {
     Some(Event::State(s))
 }
 
-/// Soloist's word for the stream's quality. Its exact shape isn't documented, so this looks
-/// anywhere in a message for an object with fields like "codec", "bitrate", "bit_depth",
-/// "sample_rate", "hifi" or "audio_quality".
+/// Soloist's word for the stream's quality, should a later version give one: its documented
+/// API (and what it sent on 2026-10-13) has no such fields. This looks anywhere in a message
+/// for an object with fields like "codec", "bitrate", "bit_depth", "sample_rate", "hifi" or
+/// "audio_quality".
 fn quality_in(v: &Value) -> Option<super::Quality> {
     const KEYS: [&str; 7] = [
         "codec",
@@ -133,10 +135,98 @@ fn quality_from(map: &serde_json::Map<String, Value>) -> Option<super::Quality> 
     (q != super::Quality::default()).then_some(q)
 }
 
-/// A copy of Soloist's latest report on the song, for checking what it says.
-fn keep_copy(text: &str) {
-    if text.contains("\"playback_state\"") || text.contains("\"track_changed\"") {
-        let _ = std::fs::write(crate::config::cache_dir().join("soloist-last.json"), text);
+/// How long commands wait for Soloist to sign in before OMAESTRO says it isn't.
+const SIGN_IN_WAIT: Duration = Duration::from_secs(20);
+
+/// Holds commands until Soloist has signed in to Spotify. A freshly started Soloist (a new
+/// output means a restart) takes a moment to sign in and refuses commands until then with
+/// "command requires authentication". It says when it's ready: `auth_state` with
+/// `logged_in: true`, sent when OMAESTRO connects and again whenever that changes.
+#[derive(Debug, Default)]
+struct Gate {
+    signed_in: bool,
+    held: Vec<Value>,
+    /// Commands sent and not yet confirmed (`command_result`): if Soloist refuses one, these
+    /// are sent again once it's signed in. Confirmed ones never are, so nothing plays twice.
+    unconfirmed: VecDeque<Value>,
+    /// Since when commands have been waiting.
+    waiting_since: Option<Instant>,
+}
+
+/// What to do with a message from Soloist.
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    /// Pass it on to the player.
+    Pass,
+    /// Keep it to ourselves (signing in is expected to take a moment).
+    Swallow,
+    /// Pass it on, and send these commands that were waiting.
+    Flush(Vec<Value>),
+}
+
+impl Gate {
+    /// A command from the player: what to send now.
+    fn command(&mut self, command: Value, now: Instant) -> Vec<Value> {
+        if self.signed_in {
+            self.unconfirmed.push_back(command.clone());
+            // Only the latest few matter; older ones were confirmed or are moot.
+            while self.unconfirmed.len() > 8 {
+                self.unconfirmed.pop_front();
+            }
+            vec![command]
+        } else {
+            self.held.push(command);
+            self.waiting_since.get_or_insert(now);
+            Vec::new()
+        }
+    }
+
+    fn message(&mut self, v: &Value, now: Instant) -> Verdict {
+        match v["type"].as_str() {
+            Some("auth_state") if v["logged_in"] == true => {
+                self.signed_in = true;
+                self.waiting_since = None;
+                let ready = std::mem::take(&mut self.held);
+                self.unconfirmed.extend(ready.iter().cloned());
+                Verdict::Flush(ready)
+            }
+            Some("auth_state") => {
+                self.signed_in = false;
+                Verdict::Swallow
+            }
+            Some("command_result") => {
+                let name = &v["command"];
+                if let Some(i) = self.unconfirmed.iter().position(|c| c["command"] == *name) {
+                    self.unconfirmed.remove(i);
+                }
+                Verdict::Pass
+            }
+            Some("error")
+                if v["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("requires authentication")) =>
+            {
+                self.signed_in = false;
+                let refused: Vec<Value> = self.unconfirmed.drain(..).collect();
+                self.held.splice(0..0, refused);
+                self.waiting_since.get_or_insert(now);
+                Verdict::Swallow
+            }
+            _ => Verdict::Pass,
+        }
+    }
+
+    /// Whether commands have waited too long: then they're dropped, and it's time to say so.
+    fn gave_up(&mut self, now: Instant) -> bool {
+        if self
+            .waiting_since
+            .is_some_and(|since| now.duration_since(since) > SIGN_IN_WAIT)
+        {
+            self.held.clear();
+            self.waiting_since = None;
+            return true;
+        }
+        false
     }
 }
 
@@ -227,11 +317,20 @@ impl Drop for Soloist {
 
 /// Owns the WebSocket: sends queued commands and reads events until either side goes away.
 fn run(mut socket: WebSocket<TcpStream>, commands: Receiver<Value>, events: impl Fn(Event)) {
+    let mut gate = Gate::default();
+    let send = |socket: &mut WebSocket<TcpStream>, list: Vec<Value>| {
+        list.into_iter()
+            .all(|command| socket.send(Message::text(command.to_string())).is_ok())
+    };
     loop {
+        if gate.gave_up(Instant::now()) {
+            events(Event::LoggedOut);
+        }
         loop {
             match commands.try_recv() {
                 Ok(command) => {
-                    if socket.send(Message::text(command.to_string())).is_err() {
+                    let now = gate.command(command, Instant::now());
+                    if !send(&mut socket, now) {
                         events(Event::Gone("Soloist stopped answering".into()));
                         return;
                     }
@@ -246,7 +345,17 @@ fn run(mut socket: WebSocket<TcpStream>, commands: Receiver<Value>, events: impl
         }
         match socket.read() {
             Ok(Message::Text(text)) => {
-                keep_copy(&text);
+                let v: Value = serde_json::from_str(&text).unwrap_or_default();
+                match gate.message(&v, Instant::now()) {
+                    Verdict::Swallow => continue,
+                    Verdict::Flush(waiting) => {
+                        if !send(&mut socket, waiting) {
+                            events(Event::Gone("Soloist stopped answering".into()));
+                            return;
+                        }
+                    }
+                    Verdict::Pass => {}
+                }
                 if let Some(event) = parse(&text) {
                     events(event);
                 }
@@ -268,6 +377,46 @@ fn run(mut socket: WebSocket<TcpStream>, commands: Receiver<Value>, events: impl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_wait_until_soloist_has_signed_in() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let cmd = |name: &str| json!({"type": "command", "command": name});
+        let auth = |on: bool| json!({"type": "auth_state", "logged_in": on});
+        let refused = json!({"type": "error", "message": "command requires authentication"});
+        let done = |name: &str| json!({"type": "command_result", "command": name});
+
+        // A fresh Soloist: not signed in yet, so commands wait, and that's not news.
+        let mut gate = Gate::default();
+        assert_eq!(gate.message(&auth(false), at(0)), Verdict::Swallow);
+        assert!(gate.command(cmd("activate"), at(0)).is_empty());
+        assert!(gate.command(cmd("play"), at(1)).is_empty());
+        // Signed in: they go, in order; from then on commands go straight away.
+        assert_eq!(
+            gate.message(&auth(true), at(2)),
+            Verdict::Flush(vec![cmd("activate"), cmd("play")])
+        );
+        assert_eq!(gate.message(&done("activate"), at(2)), Verdict::Pass);
+        assert_eq!(gate.command(cmd("pause"), at(3)), vec![cmd("pause")]);
+
+        // Refused after all: what wasn't confirmed waits and goes again once signed in, but
+        // the confirmed activate isn't repeated.
+        assert_eq!(gate.message(&refused, at(4)), Verdict::Swallow);
+        assert!(gate.command(cmd("seek"), at(4)).is_empty());
+        assert_eq!(
+            gate.message(&auth(true), at(5)),
+            Verdict::Flush(vec![cmd("play"), cmd("pause"), cmd("seek")])
+        );
+
+        // Never signing in: after a while, give up and say so (once).
+        let mut gate = Gate::default();
+        gate.command(cmd("play"), at(0));
+        assert!(!gate.gave_up(at(10)));
+        assert!(gate.gave_up(at(21)));
+        assert!(!gate.gave_up(at(22)));
+        assert!(gate.held.is_empty());
+    }
 
     #[test]
     fn reads_soloist_messages() {

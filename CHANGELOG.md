@@ -3,6 +3,18 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.7.1 — 2026-10-13
+
+- **Fix: "Spotify: command requires authentication".**
+  - The cause: Soloist restarts when the output changes, and takes a moment to sign in to
+    Spotify. OMAESTRO sent "play" straight away, and Soloist refused it.
+  - The fix: commands now wait until Soloist says it's signed in. A command it refuses for
+    that reason is sent again once it is; confirmed ones never are.
+  - After 20 seconds without a sign-in, OMAESTRO says Soloist isn't signed in.
+- Spotify played on this computer can't show its quality: Soloist doesn't report it (its
+  documented interface has no such fields). OMAESTRO no longer keeps a copy of Soloist's
+  reports (`~/.cache/omaestro/soloist-last.json`).
+
 ## 0.7.0 — 2026-10-13
 
 - **Animations for Spotify on Sonos.**

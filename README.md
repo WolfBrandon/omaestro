@@ -194,8 +194,6 @@ changed in each one is in [CHANGELOG.md](CHANGELOG.md); ideas for later are in
 - `~/.cache/omaestro/sonos/`: songs converted or downloaded for Sonos, cleared after a week.
 - `~/.cache/omaestro/sonos.log`: every command that changed something on a speaker.
 - `~/.cache/omaestro/sonos-spotify-account`: Sonos's number for your Spotify account.
-- `~/.cache/omaestro/soloist-last.json`: Soloist's latest report on the song playing, kept
-  for checking what it says about stream quality.
 - `$XDG_RUNTIME_DIR/omaestro/mpv.sock`: OMAESTRO's control line to mpv while it runs.
 
 ## Measured on the WolfMusic NAS (117,707 tracks)
