@@ -243,8 +243,8 @@ The `live_` tests (`cargo test live_ -- --ignored --nocapture`) check against re
 a YouTube search and silent playback, a Sonos household
 (`OMAESTRO_SONOS_IP=<speaker address>`) and a PipeWire output (`OMAESTRO_SINK=<node name>`).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Changes are in [CHANGELOG.md](CHANGELOG.md) and ideas
-in [BACKLOG.md](BACKLOG.md). Versions are Release.Version.Fix.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Changes are in [CHANGELOG.md](CHANGELOG.md), and
+what's planned for 1.0.0 is in [BACKLOG.md](BACKLOG.md). Versions are Release.Version.Fix.
 
 ## Acknowledgements
 

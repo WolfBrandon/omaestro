@@ -1,12 +1,23 @@
-# Backlog
+# Road to 1.0.0
 
-Ideas for later, roughly in the order they came up. Done ones move to
+Everything here is in 1.0.0. Until it's all done, OMAESTRO stays at 0.9.x: each piece ships as
+the next 0.9 version, and when the list is empty, that release is 1.0.0. Done items move to
 [CHANGELOG.md](CHANGELOG.md).
 
-## Next: a taskbar companion for Omarchy (1.0.0)
+- [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.
+- **Library and listening**
+  - [ ] **File Info**: everything about a song, in a pop-up.
+  - [ ] **Sort by popularity**: an artist's songs, most popular first.
+  - [ ] **Track plays**: play counts and recently played, and maybe scrobbling.
+- **Sound and sources**
+  - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
+  - [ ] **Connection status**: a dot and a word for each source.
+- **Living with it**
+  - [ ] **Update in place**: switch to a new version without closing and reopening.
 
-OMAESTRO stays at 0.9.x until this is done. A module for Omarchy's bar (Waybar) to go with
-the tray icon:
+## Taskbar companion for Omarchy
+
+A module for Omarchy's bar (Waybar) to go with the tray icon:
 - **Shows** what's playing, and where: title · artist, and the G560, a Sonos room, and so on.
 - **Click** to bring OMAESTRO back (`omaestro launch`).
 - **Scroll** for volume; middle-click or right-click to play/pause or skip.
@@ -25,7 +36,7 @@ What it would show:
   ReplayGain.
 - **Spotify and YouTube Music songs:** the song's link instead of a file path.
 
-## Sort songs by popularity
+## Sort by popularity
 
 Order an artist's songs (in the browser and Search) by how popular they are, not by name.
 Where the numbers could come from:
@@ -44,7 +55,7 @@ Count plays and remember when each song last played, in the library index. That 
 (sign in once) or ListenBrainz (a token from your profile). A play would count after half
 the song or four minutes, Last.fm's rule.
 
-## Configure the output rate
+## Output rate
 
 Today PipeWire picks the rate, and the Now Playing badge shows "→ 48k" when it resamples.
 OMAESTRO could make each file play at its own rate instead:
@@ -55,7 +66,7 @@ OMAESTRO could make each file play at its own rate instead:
 
 Either way it affects everything else playing on that device at the same time.
 
-## Sources: show connection status
+## Connection status
 
 A coloured dot and a word for each source, in Settings → Sources and on Search's provider
 pills:
@@ -64,9 +75,9 @@ pills:
 - **YouTube Music:** signed in, or the browser login no longer works.
 - **Sonos:** speakers reachable, or not.
 
-## Update without closing and reopening
+## Update in place
 
 When `./install.sh` puts a new version in place, the running OMAESTRO would notice and
 restart itself into it. It would keep the queue, the song and position, the output and the
 volume, with only a moment's gap in the sound. It could wait for a pause, or ask first in the
-status line ("v0.7.0 is ready: press U to switch").
+status line ("v0.9.5 is ready: press U to switch").
