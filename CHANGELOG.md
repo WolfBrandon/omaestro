@@ -3,6 +3,19 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.7.2 — 2026-10-13
+
+- **Fix: Spotify songs on this computer skipped without playing.**
+  - The likely cause: when Soloist becomes the active device, Spotify can resume what the
+    account last played elsewhere. OMAESTRO took that other song as "ours has finished",
+    paused Soloist and moved on.
+  - Now news about any other song counts only once ours has actually started.
+  - Until then, Soloist is asked again every 4 seconds. After 3 tries the song is skipped,
+    with "Spotify didn't start …" on the status line.
+- `~/.cache/omaestro/soloist.log` records what's sent to Soloist and what it answers (started
+  afresh each time Soloist starts), like `sonos.log`.
+- Opening a playlist says how to start it: "Opened Episode 2: 13 songs · Space or ⏎ plays".
+
 ## 0.7.1 — 2026-10-13
 
 - **Fix: "Spotify: command requires authentication".**

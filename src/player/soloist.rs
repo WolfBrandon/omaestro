@@ -135,6 +135,38 @@ fn quality_from(map: &serde_json::Map<String, Value>) -> Option<super::Quality> 
     (q != super::Quality::default()).then_some(q)
 }
 
+/// One line in `~/.cache/omaestro/soloist.log`: what was sent to Soloist and what it said
+/// (all but the position ticks), so a problem shows its cause. Started afresh with Soloist.
+fn log(line: &str) {
+    use std::io::Write;
+    let path = crate::config::cache_dir().join("soloist.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{} {line}", crate::secrets::now_secs());
+    }
+}
+
+/// A message from Soloist in a few words: its type and what it's about.
+fn summary(v: &Value) -> String {
+    let kind = v["type"].as_str().unwrap_or("?");
+    let about = [
+        v["item"]["uri"].as_str().map(str::to_string),
+        v["item"]["decorations"]["identity"]["name"]
+            .as_str()
+            .map(|n| format!("“{n}”")),
+        v["status"].as_str().map(str::to_string),
+        v["command"].as_str().map(str::to_string),
+        v["message"].as_str().map(str::to_string),
+        v.get("logged_in").map(|l| format!("logged_in={l}")),
+        v.get("is_active").map(|a| format!("active={a}")),
+    ];
+    let about: Vec<String> = about.into_iter().flatten().collect();
+    format!("← {kind} {}", about.join(" "))
+}
+
 /// How long commands wait for Soloist to sign in before OMAESTRO says it isn't.
 const SIGN_IN_WAIT: Duration = Duration::from_secs(20);
 
@@ -246,6 +278,13 @@ impl Soloist {
         if !soloist::installed() {
             anyhow::bail!("Spotify Soloist isn't downloaded yet: Settings → Sources → set up");
         }
+        let _ = std::fs::write(
+            crate::config::cache_dir().join("soloist.log"),
+            format!(
+                "{} Soloist starting for output {device:?}\n",
+                crate::secrets::now_secs()
+            ),
+        );
         let mut child = soloist::spawn(&key, device)?;
         let port = match soloist::ws_port(&mut child) {
             Ok(port) => port,
@@ -319,8 +358,10 @@ impl Drop for Soloist {
 fn run(mut socket: WebSocket<TcpStream>, commands: Receiver<Value>, events: impl Fn(Event)) {
     let mut gate = Gate::default();
     let send = |socket: &mut WebSocket<TcpStream>, list: Vec<Value>| {
-        list.into_iter()
-            .all(|command| socket.send(Message::text(command.to_string())).is_ok())
+        list.into_iter().all(|command| {
+            log(&format!("→ {command}"));
+            socket.send(Message::text(command.to_string())).is_ok()
+        })
     };
     loop {
         if gate.gave_up(Instant::now()) {
@@ -346,6 +387,9 @@ fn run(mut socket: WebSocket<TcpStream>, commands: Receiver<Value>, events: impl
         match socket.read() {
             Ok(Message::Text(text)) => {
                 let v: Value = serde_json::from_str(&text).unwrap_or_default();
+                if v["type"] != "position_sync" {
+                    log(&summary(&v));
+                }
                 match gate.message(&v, Instant::now()) {
                     Verdict::Swallow => continue,
                     Verdict::Flush(waiting) => {

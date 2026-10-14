@@ -559,7 +559,11 @@ fn apply(
             }
         }
         Action::LoadPlaylist { name, path, tracks } => {
-            app.status = format!("Opened {name}: {}", plural(tracks.len(), "song"));
+            // Opening only fills the queue: say how to start it.
+            app.status = format!(
+                "Opened {name}: {} · Space or ⏎ plays",
+                plural(tracks.len(), "song")
+            );
             // Imported playlists have no file yet: s asks for a name to save them under.
             let named = path.map(|path| player::Named {
                 name,

@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioDevice {
@@ -128,6 +128,11 @@ struct Snapshot {
     what: String,
 }
 
+/// How long Soloist gets to start a song before it's asked again, and how many times it's
+/// asked before OMAESTRO gives up on the song.
+const SOLOIST_RETRY: Duration = Duration::from_secs(4);
+const SOLOIST_TRIES: u8 = 3;
+
 /// How many edits undo can go back.
 const UNDO_STEPS: usize = 50;
 
@@ -140,6 +145,12 @@ pub struct Player {
     /// The one before, whose late news is ignored.
     soloist_previous: Option<String>,
     soloist_held: bool,
+    /// Soloist has reported our song: until then, news about any other song (what it was
+    /// playing before, or what Spotify resumed as it became the active device) isn't the end
+    /// of ours.
+    soloist_started: bool,
+    /// When Soloist was last asked to play our song, and how many times, while it hasn't.
+    soloist_asked: Option<(Instant, u8)>,
     sonos: Option<sonos::SonosPlayer>,
     household: Option<Arc<sonos_api::Sonos>>,
     media_port: u16,
@@ -179,6 +190,8 @@ impl Player {
             soloist_uri: None,
             soloist_previous: None,
             soloist_held: false,
+            soloist_started: false,
+            soloist_asked: None,
             sonos: None,
             household: None,
             media_port: 47100,
@@ -486,6 +499,8 @@ impl Player {
                 if let Some(s) = &self.soloist {
                     self.soloist_previous = self.soloist_uri.replace(track.uri.clone());
                     self.soloist_held = false;
+                    self.soloist_started = false;
+                    self.soloist_asked = Some((Instant::now(), 1));
                     s.set_volume(self.status.volume.round() as u8);
                     s.play(&track.uri);
                     if start > 1.0 {
@@ -780,8 +795,32 @@ impl Player {
             self.waiting = None;
             self.play_stream(&stream, start)?;
         }
+        // Soloist hasn't started our song yet: ask again every few seconds, then give up.
+        if self.engine == Engine::Soloist
+            && !self.soloist_started
+            && !self.soloist_held
+            && let Some((asked, tries)) = self.soloist_asked
+            && asked.elapsed() >= SOLOIST_RETRY
+        {
+            let title = self.current().map(|t| t.title.clone()).unwrap_or_default();
+            if tries < SOLOIST_TRIES {
+                if let (Some(s), Some(uri)) = (&self.soloist, &self.soloist_uri) {
+                    s.play(uri);
+                }
+                self.soloist_asked = Some((Instant::now(), tries + 1));
+            } else {
+                self.soloist_asked = None;
+                self.status.last_error = Some(format!("Spotify didn't start “{title}”"));
+                if let Some(s) = &self.soloist {
+                    self.soloist_held = true;
+                    s.pause();
+                }
+                return self.advance();
+            }
+        }
         // Soloist doesn't report the end of a song; notice it from the position.
         if self.engine == Engine::Soloist
+            && self.soloist_started
             && !self.status.paused
             && !self.status.idle
             && self.status.duration > 0.0
@@ -974,6 +1013,16 @@ impl Player {
                 {
                     return Ok(());
                 }
+                // Until Soloist reports our song, its news is about something else.
+                if !self.soloist_started {
+                    match (&s.uri, &self.soloist_uri) {
+                        (Some(uri), Some(ours)) if uri == ours => {
+                            self.soloist_started = true;
+                            self.soloist_asked = None;
+                        }
+                        _ => return Ok(()),
+                    }
+                }
                 // Soloist moved on to a song we didn't ask for: ours has ended.
                 if let (Some(uri), Some(ours)) = (&s.uri, &self.soloist_uri)
                     && uri != ours
@@ -1135,6 +1184,68 @@ mod tests {
             Player::start(&options, &tmp.0.join("mpv.sock"), tx).unwrap(),
             rx,
         )
+    }
+
+    /// Spotify on this computer: news from Soloist about some other song (what Spotify
+    /// resumed as Soloist became the active device) before ours has started isn't the end of
+    /// ours. Soloist is asked again a few times, then the song is given up on. There's no real
+    /// Soloist here, and the queue has one song, so nothing can play.
+    #[test]
+    fn soloist_news_about_another_song_isnt_the_end_of_ours() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-soloist");
+        let (mut player, _rx) = silent(&tmp);
+        let ours = Track {
+            source: Source::Spotify,
+            uri: "spotify:track:ours".into(),
+            title: "Ours".into(),
+            duration_ms: 200_000,
+            ..Track::default()
+        };
+        player.queue = vec![ours.clone()];
+        player.current = Some(0);
+        player.engine = Engine::Soloist;
+        player.status.idle = false;
+        player.status.duration = 200.0;
+        player.soloist_uri = Some(ours.uri.clone());
+        player.soloist_asked = Some((Instant::now(), 1));
+        let state = |uri: &str| {
+            Event::Soloist(soloist::Event::State(soloist::State {
+                status: Some("playing".into()),
+                uri: Some(uri.into()),
+                duration_ms: Some(227_000.0),
+                position_ms: Some(0.0),
+                at_ms: Some(crate::secrets::now_secs() as f64 * 1000.0),
+                speed: Some(1.0),
+                ..Default::default()
+            }))
+        };
+
+        player.handle(state("spotify:track:resumed")).unwrap();
+        assert_eq!(player.current_index(), Some(0));
+        assert!(!player.status.idle, "not taken for the end of ours");
+        assert_eq!(
+            player.status.duration, 200.0,
+            "the other song's length isn't ours"
+        );
+        player.handle(state("spotify:track:ours")).unwrap();
+        assert!(player.soloist_started);
+        assert_eq!(player.status.duration, 227.0);
+
+        // Never starting: asked again after a few seconds, then given up on, with a reason.
+        player.soloist_started = false;
+        player.soloist_asked = Some((Instant::now() - SOLOIST_RETRY, 1));
+        player.tick().unwrap();
+        assert_eq!(player.soloist_asked.map(|(_, n)| n), Some(2));
+        assert!(!player.status.idle);
+        player.soloist_asked = Some((Instant::now() - SOLOIST_RETRY, SOLOIST_TRIES));
+        player.tick().unwrap();
+        let error = player.status.last_error.clone().unwrap_or_default();
+        assert!(error.contains("didn't start “Ours”"), "{error}");
+        assert!(player.status.idle, "the queue had nothing after it");
     }
 
     #[test]

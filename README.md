@@ -193,6 +193,8 @@ changed in each one is in [CHANGELOG.md](CHANGELOG.md); ideas for later are in
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, downloaded by OMAESTRO.
 - `~/.cache/omaestro/sonos/`: songs converted or downloaded for Sonos, cleared after a week.
 - `~/.cache/omaestro/sonos.log`: every command that changed something on a speaker.
+- `~/.cache/omaestro/soloist.log`: what was sent to Soloist and what it answered, since it last
+  started.
 - `~/.cache/omaestro/sonos-spotify-account`: Sonos's number for your Spotify account.
 - `$XDG_RUNTIME_DIR/omaestro/mpv.sock`: OMAESTRO's control line to mpv while it runs.
 
