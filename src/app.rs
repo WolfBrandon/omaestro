@@ -125,6 +125,8 @@ pub enum News {
     LastFmAllow(String),
     LastFmSignedIn(Result<crate::integrations::LastFm, String>),
     ListenBrainzSignedIn(Result<crate::integrations::ListenBrainz, String>),
+    /// How sending plays to a service is going.
+    Scrobbling(Service, crate::scrobble::Report),
     /// A file's own details, read for File Info.
     FileDetails {
         path: String,
@@ -200,14 +202,30 @@ pub struct Open {
     pub tab: Source,
     pub sel: usize,
     pub local: Vec<Saved>,
+    /// Once anything's been played: how many songs, and when the last play was. The Saved
+    /// list then starts with "Recently played" and "Most played".
+    pub plays: Option<(usize, Option<u64>)>,
     pub spotify: Listing,
     pub youtube: Listing,
 }
 
+/// The lists made from your plays, as they come first in the Saved list.
+pub const PLAY_LISTS: [crate::plays::List; 2] =
+    [crate::plays::List::Recent, crate::plays::List::Most];
+
 impl Open {
+    /// How many of the Saved list's entries are the lists made from your plays.
+    pub fn built_in(&self) -> usize {
+        if self.plays.is_some() {
+            PLAY_LISTS.len()
+        } else {
+            0
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self.tab {
-            Source::Local => self.local.len(),
+            Source::Local => self.built_in() + self.local.len(),
             Source::Spotify => listing_len(&self.spotify),
             Source::YouTube => listing_len(&self.youtube),
         }
@@ -372,6 +390,8 @@ fn fraction(area: Rect, x: u16) -> f64 {
 /// File Info: the song, the file's own details once read, and what it was opened over.
 pub struct FileInfo {
     pub track: Track,
+    /// How many times it's been played, and when last.
+    pub played: (u64, Option<u64>),
     pub details: Option<Result<crate::fileinfo::Details, String>>,
     pub back: Option<Box<Overlay>>,
 }
@@ -438,6 +458,12 @@ pub struct App {
     pub listenbrainz: Option<crate::integrations::ListenBrainz>,
     /// Set to stop a Last.fm sign-in that's waiting for you to allow OMAESTRO.
     lastfm_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Every play, for the lists and File Info; opened by the main program.
+    pub plays: Option<crate::plays::Store>,
+    /// Sends plays to Last.fm and ListenBrainz; started by the main program.
+    pub scrobbler: Option<crate::scrobble::Scrobbler>,
+    /// How that's going: Last.fm, then ListenBrainz.
+    pub scrobbling: [crate::scrobble::Report; 2],
     /// How each source is doing, and when that was last checked (checks run in the
     /// background).
     pub statuses: crate::status::Statuses,
@@ -502,6 +528,9 @@ impl App {
             lastfm: crate::integrations::LastFm::load(),
             listenbrainz: crate::integrations::ListenBrainz::load(),
             lastfm_cancel: None,
+            plays: None,
+            scrobbler: None,
+            scrobbling: Default::default(),
             statuses: crate::status::Statuses::default(),
             checking_sources: false,
             sources_checked: None,
@@ -785,6 +814,11 @@ impl App {
             tab: Source::Local,
             sel: 0,
             local: playlist::list(&self.playlist_dir),
+            plays: self
+                .plays
+                .as_ref()
+                .and_then(|p| p.summary().ok())
+                .filter(|(songs, _)| *songs > 0),
             spotify: if self.spotify.is_some() {
                 Listing::Loading
             } else {
@@ -928,14 +962,36 @@ impl App {
         }
     }
 
+    /// "Recently played" or "Most played", into the queue like a playlist.
+    fn load_plays(&mut self, which: crate::plays::List) -> Option<Action> {
+        let tracks = match self.plays.as_ref()?.list(which, &self.db) {
+            Ok(tracks) if !tracks.is_empty() => tracks,
+            Ok(_) => return None,
+            Err(e) => {
+                self.status = format!("Couldn't open {}: {e:#}", which.name());
+                return None;
+            }
+        };
+        Some(Action::LoadPlaylist {
+            name: which.name().into(),
+            path: None,
+            tracks,
+            source: Source::Local,
+        })
+    }
+
     /// Enter (or a double-click) in the Open list.
     fn open_chosen(&mut self) -> Option<Action> {
         let Some(Overlay::Open(open)) = &self.overlay else {
             return None;
         };
         let (tab, sel) = (open.tab, open.sel);
+        if tab == Source::Local && sel < open.built_in() {
+            self.overlay = None;
+            return self.load_plays(PLAY_LISTS[sel]);
+        }
         let chosen = match tab {
-            Source::Local => open.local.get(sel).cloned().map(Err),
+            Source::Local => open.local.get(sel - open.built_in()).cloned().map(Err),
             Source::Spotify => match &open.spotify {
                 Listing::Ready(l) => l.get(sel).cloned().map(Ok),
                 _ => None,
@@ -1077,11 +1133,41 @@ impl App {
             });
         }
         let back = self.overlay.take().map(Box::new);
+        let played = self
+            .plays
+            .as_ref()
+            .and_then(|p| p.played(&track).ok())
+            .unwrap_or((0, None));
         self.overlay = Some(Overlay::FileInfo(Box::new(FileInfo {
             track,
+            played,
             details: None,
             back,
         })));
+    }
+
+    /// A song started or counted as played (see `plays`): it's remembered, and sent on to
+    /// Last.fm and ListenBrainz if they're connected.
+    pub fn on_play(&mut self, happened: crate::plays::Happened) {
+        use crate::plays::Happened;
+        let (track, at, played) = match happened {
+            Happened::Started(track, at) => (track, at, false),
+            Happened::Played(track, at) => (track, at, true),
+        };
+        if played && let Some(store) = &self.plays {
+            let _ = store.record(&track, at);
+        }
+        let send = track.source != Source::Spotify || self.config.scrobble.spotify;
+        if send
+            && let Some(scrobbler) = &self.scrobbler
+            && let Some(listen) = crate::scrobble::Listen::of(&track, at)
+        {
+            if played {
+                scrobbler.played(listen);
+            } else {
+                scrobbler.now_playing(listen);
+            }
+        }
     }
 
     /// Closes File Info, back to what it was opened from (Search).
@@ -1222,6 +1308,7 @@ impl App {
             update: self.update_ready.clone(),
             lastfm: self.lastfm.as_ref().map(|a| a.user.clone()),
             listenbrainz: self.listenbrainz.as_ref().map(|a| a.user.clone()),
+            scrobbling: self.scrobbling.clone(),
             themes: self.themes.clone(),
             omarchy_theme: crate::theme::omarchy_current(),
         }
@@ -1574,6 +1661,9 @@ impl App {
                         }
                     }
                 }
+            }
+            News::Scrobbling(service, report) => {
+                self.scrobbling[service as usize] = report;
             }
             News::ListenBrainzSignedIn(result) => {
                 let step = match &mut self.overlay {
@@ -2969,6 +3059,70 @@ pub mod tests {
         assert_eq!(shows(&app), Some(queue[0].title.clone()));
         press(&mut app, KeyCode::Esc, &ctx);
         assert!(matches!(app.overlay, Some(Overlay::Search)));
+    }
+
+    /// Plays are remembered whether or not they're sent anywhere, and give the two lists at
+    /// the top of the Saved playlists, and File Info's count.
+    #[test]
+    fn plays_are_remembered_and_listed() {
+        use crate::plays::{Happened, Store};
+        let tmp = TempDir::new("app-plays");
+        let mut app = app(&tmp);
+        app.config.scrobble.spotify = false;
+        app.plays = Some(Store::open(&tmp.0.join("plays.db")).unwrap());
+        app.open_playlists();
+        assert!(
+            matches!(&app.overlay, Some(Overlay::Open(o)) if o.built_in() == 0),
+            "nothing played yet, no lists"
+        );
+        app.overlay = None;
+
+        let song = Track {
+            source: Source::Spotify,
+            uri: "spotify:track:4uLU6hMCjMI75M1A2tKUQC".into(),
+            title: "Roll".into(),
+            artist: "Rick".into(),
+            duration_ms: 200_000,
+            ..Track::default()
+        };
+        app.on_play(Happened::Started(song.clone(), 100));
+        app.on_play(Happened::Played(song.clone(), 100));
+        app.on_play(Happened::Played(song.clone(), 500));
+        assert_eq!(
+            app.plays.as_ref().unwrap().played(&song).unwrap(),
+            (2, Some(500)),
+            "counted here even with Spotify plays not sent"
+        );
+
+        app.open_playlists();
+        match &app.overlay {
+            Some(Overlay::Open(o)) => {
+                assert_eq!((o.built_in(), o.len()), (2, 2));
+                assert_eq!(o.plays, Some((1, Some(500))));
+            }
+            _ => panic!("the Open list"),
+        }
+        for (sel, name) in [(0, "Recently played"), (1, "Most played")] {
+            app.open_playlists();
+            if let Some(Overlay::Open(o)) = &mut app.overlay {
+                o.sel = sel;
+            }
+            match app.open_chosen() {
+                Some(Action::LoadPlaylist {
+                    name: got, tracks, ..
+                }) => {
+                    assert_eq!(got, name);
+                    assert_eq!(tracks[0].uri, song.uri);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+
+        app.open_file_info(song.clone());
+        match &app.overlay {
+            Some(Overlay::FileInfo(info)) => assert_eq!(info.played, (2, Some(500))),
+            _ => panic!("File Info"),
+        }
     }
 
     #[test]

@@ -3,6 +3,30 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.8 — 2026-10-14
+
+- **Plays are counted.**
+  - A song counts once you've heard half of it or 4 minutes, whichever comes first. Songs of
+    30 seconds or less never count, and pauses, loading and skipping ahead don't add to it.
+  - Every play is kept in `~/.local/share/omaestro/plays.db`, from any source and on any
+    output. Picking a song up after switching outputs, or after an update, is the same
+    play.
+- **Recently played and Most played** are at the top of your saved playlists (`O`, or the
+  Open button), once there are plays; each opens into the queue like a playlist. File Info
+  says how many times a song has been played, and when last.
+- **Scrobbling** to Last.fm and ListenBrainz, whichever you've connected.
+  - "Now playing" is sent as a song starts, and the play once it counts.
+  - Plays wait on disk while offline or while a service is down, then go oldest first.
+  - Settings → Integrations shows how each is doing: "sending plays", "3 waiting to send" or
+    "sign in again".
+  - **Spotify plays** (on by default) can be switched off there, for anyone whose Spotify
+    already scrobbles.
+  - What's sent: title, artist, album, length, track number and when; the MusicBrainz id and
+    ISRC if tagged; a streamed song's web address. Never a file's name or folder.
+- **Tests no longer touch your real settings.** Running OMAESTRO's tests used your real
+  settings folder, and one of them signed a real Last.fm account out. Tests now keep their
+  own folder in `/tmp`.
+
 ## 0.9.7 — 2026-10-14
 
 Fixes from three independent code reviews (Grok, Antigravity, Codex).

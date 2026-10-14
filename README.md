@@ -28,6 +28,9 @@ were designed in [OTIS](https://github.com/WolfBrandon/otis).
 - **Themes**: follows Omarchy's theme live, or pick any installed Omarchy theme.
 - **Connection status**: a dot and a word for each source (your folders, Spotify, YouTube
   Music, Sonos) in Settings and Search, checked in the background.
+- **Plays and scrobbling**: every song you play is counted, giving "Recently played" and "Most
+  played" (at the top of your saved playlists: `O`, or the Open button) and a count in File
+  Info. Plays are sent to Last.fm and ListenBrainz once you connect them, offline plays later.
 - Mouse and keyboard work everywhere.
 
 ## Requirements
@@ -113,7 +116,7 @@ Everything is optional; open Settings with `F2` or the gear button.
    - Your desktop may ask to unlock the keyring.
    - The yt-dlp project warns that heavy automated use with cookies can get an account
      flagged. OMAESTRO only does what you'd do by hand.
-4. **Last.fm and ListenBrainz** (Settings → Integrations). Where your plays will be sent
+4. **Last.fm and ListenBrainz** (Settings → Integrations). Where your plays are sent
    (scrobbled).
    - **Last.fm:** make a free API account at
      [last.fm/api/account/create](https://www.last.fm/api/account/create) (any name; leave
@@ -121,6 +124,15 @@ Everything is optional; open Settings with `F2` or the gear button.
      Last.fm page that opens.
    - **ListenBrainz:** paste the user token from
      [listenbrainz.org/settings](https://listenbrainz.org/settings/).
+   - **When a play counts:** after half the song or 4 minutes of listening, whichever comes
+     first; songs of 30 seconds or less never count. Pauses, loading and skipping ahead don't
+     add to it. "Now playing" is sent as a song starts.
+   - **Offline:** plays wait in `~/.local/share/omaestro/scrobbles.json` and go, oldest first,
+     once the service answers. Each service's row says how it's going: "sending plays", "3
+     waiting to send", or "sign in again".
+   - **Spotify plays** are sent too. If Spotify already scrobbles for you (linked in
+     Spotify's own settings), switch **Spotify plays** off there so they don't count twice.
+   - Plays are counted here whether or not you connect either service.
 5. **Sonos**. Speakers are found by themselves.
    - They fetch local files and YouTube songs from OMAESTRO on port 47100, so allow that from
      your home network if you run a firewall, e.g. with ufw (adjust the network to yours):
@@ -209,6 +221,9 @@ hidden = []
 [updates]
 auto = true                             # switch to a newly installed version by itself
 
+[scrobble]
+spotify = true                          # send Spotify plays to Last.fm and ListenBrainz too
+
 [sonos]
 speakers = []                           # found by themselves, then remembered
 media_port = 47100
@@ -222,6 +237,10 @@ never = []                              # speaker ids never to send anything to
   `lastfm.json`, `listenbrainz.json`: sign-ins, readable only by you. Deleting one signs out.
 - `~/.local/share/omaestro/playlists/*.jspf`: your playlists (JSPF, a standard format).
 - `~/.local/share/omaestro/last-queue.jspf` and `last-queue.json`: the queue as you left it.
+- `~/.local/share/omaestro/plays.db`: every play (when, and the song). Deleting it forgets
+  them.
+- `~/.local/share/omaestro/scrobbles.json`: plays waiting to go to Last.fm or ListenBrainz
+  (readable only by you).
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, once downloaded.
 - `~/.cache/omaestro/library.db`: the library index. Safe to delete; it's rebuilt.
 - `~/.cache/omaestro/sonos/`: songs converted or downloaded for Sonos, cleared after a week.
@@ -229,6 +248,7 @@ never = []                              # speaker ids never to send anything to
   (readable only by you; song addresses aren't written down). Past 1 MB the previous one is
   kept as `sonos.log.old`.
 - `~/.cache/omaestro/soloist.log`: what was sent to Soloist and what it answered.
+- `~/.cache/omaestro/scrobble.log`: plays a service refused, and why; and retries.
 - `~/.cache/omaestro/sonos-spotify-account`: Sonos's number for your Spotify account.
 - `$XDG_RUNTIME_DIR/omaestro/mpv.sock`: the control line to mpv while OMAESTRO runs.
 
@@ -237,7 +257,10 @@ never = []                              # speaker ids never to send anything to
 - **No telemetry.** OMAESTRO talks to:
   - Spotify's Web API, through your own app;
   - YouTube, directly and through yt-dlp;
-  - Last.fm and ListenBrainz, once you connect them;
+  - Last.fm and ListenBrainz, once you connect them: each song as it starts and once it
+    counts (title, artist, album, length, track number, when, and the MusicBrainz id and
+    ISRC if tagged; for Spotify and YouTube Music songs, their web address). Never a file's
+    name or folder;
   - Sonos speakers on your network;
   - Soloist, on this computer.
 - **Sign-ins** are stored in `~/.config/omaestro`, readable only by you. The YouTube Music

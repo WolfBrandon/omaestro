@@ -236,6 +236,11 @@ impl Player {
         self.current
     }
 
+    /// The player's number for the song it was last asked to start: a new one each time.
+    pub fn ticket(&self) -> u64 {
+        self.ticket
+    }
+
     pub fn current(&self) -> Option<&Track> {
         self.current.and_then(|i| self.queue.get(i))
     }

@@ -19,6 +19,12 @@ for this repository, rather than in a public issue.
   - `lastfm.json`: your Last.fm API key and secret, and the session key from allowing
     OMAESTRO.
   - `listenbrainz.json`: your ListenBrainz user token.
+- **Your plays**, in `~/.local/share/omaestro`:
+  - `plays.db`: every play, kept on this computer.
+  - `scrobbles.json` (readable only by you): plays waiting to go to Last.fm or ListenBrainz.
+    What's sent is the song's title, artist, album, length, track number, when you played
+    it, and the MusicBrainz id and ISRC if tagged; for Spotify and YouTube Music songs also
+    their web address. Never a file's name or folder.
 - **A file server** on port 47100, for Sonos. It opens the first time you play on Sonos and
   stays open until you quit. It:
   - offers only the song playing now, under a random address, and nothing while Sonos is
@@ -30,6 +36,7 @@ for this repository, rather than in a public issue.
   - answers a few connections at a time, with short request lines;
   - is never written down by address: `sonos.log` (readable only by you) records commands
     without song addresses.
-- **Nothing is sent anywhere else.** No telemetry.
+- **Nothing is sent anywhere else.** No telemetry. Plays go only to the services you
+  connect.
 
 Signing out in Settings (or deleting the file) removes a sign-in.

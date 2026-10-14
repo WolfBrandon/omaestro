@@ -9,8 +9,8 @@ In the order they'll be built:
 - [x] **Connection status**: a dot and a word for each source (0.9.2).
 - [x] **File Info**: everything about a song, in a pop-up (0.9.3).
 - [x] **Update in place**: switch to a new version without closing and reopening (0.9.4).
-- [ ] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
-  ListenBrainz. (Signing in to both, in Settings → Integrations: done in 0.9.5.)
+- [x] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
+  ListenBrainz (sign-in 0.9.5, plays and scrobbling 0.9.8).
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
 - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.
@@ -40,16 +40,6 @@ bar's right side, just before the tray:
     scrobbling.
   - **Your own play counts:** no outside service.
 - Look-ups are cached in the library index, so sorting stays instant.
-
-## Track plays and scrobbling
-
-- **Play counts and last played** for every song (local, Spotify and YouTube Music), kept in
-  the library index. That gives "most played" and "recently played" lists.
-- **Scrobbling to both Last.fm and ListenBrainz,** each switched on in Settings → Sources:
-  - **Last.fm:** a free API key and secret you create, then sign in once in the browser.
-  - **ListenBrainz:** paste the token from your ListenBrainz profile.
-- **The rules:** a play counts after half the song or four minutes (Last.fm's rule), and
-  "now playing" is sent as a song starts. Plays made offline are sent later.
 
 ## Output rate
 

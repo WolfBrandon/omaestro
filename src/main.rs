@@ -13,6 +13,8 @@ mod integrations;
 mod library;
 mod player;
 mod playlist;
+mod plays;
+mod scrobble;
 mod search;
 mod secrets;
 mod session;
@@ -127,7 +129,17 @@ fn run_player(resume: bool) -> Result<()> {
     // The queue from last time, read before the library index goes to the app.
     let db = open_db()?;
     let last = session::load(&config::data_dir(), &db);
-    let mut app = App::new(db, config, news_tx)?;
+    let mut app = App::new(db, config, news_tx.clone())?;
+    // Plays: remembered here, and sent to Last.fm and ListenBrainz when they're connected.
+    app.plays = plays::Store::open(&config::data_dir().join("plays.db")).ok();
+    app.scrobbler = Some(scrobble::Scrobbler::start(
+        config::data_dir().join("scrobbles.json"),
+        scrobble::Endpoints::default(),
+        scrobble::Accounts::load,
+        move |service, report| {
+            let _ = news_tx.send(News::Scrobbling(service, report));
+        },
+    ));
     if let Some(last) = last {
         app.queue_sel = last.current.unwrap_or(0);
         player.restore(last.tracks, last.current, last.playlist, last.position);
@@ -375,6 +387,9 @@ fn event_loop(
     let mut theme_file = ThemeFile::for_setting(&theme_setting);
     let mut theme_checked = Instant::now() - Duration::from_secs(60);
     let mut last_current = player.current_index();
+    // Plays: what's been heard of the song playing, checked each time round.
+    let mut tracker = plays::Tracker::default();
+    let mut tracked = Instant::now();
     let mut hits = Vec::new();
     let mut had_overlay = false;
     // The visualizer's capture, which target it listens to, and when it last tried to start.
@@ -587,6 +602,20 @@ fn event_loop(
             dirty = true;
         }
         player.tick()?;
+        let elapsed = tracked.elapsed().as_secs_f64();
+        tracked = Instant::now();
+        let seen = plays::Seen {
+            ticket: player.ticket(),
+            track: player.current(),
+            position: player.status.position,
+            duration: player.status.duration,
+            playing: !player.status.idle
+                && !player.status.paused
+                && player.status.preparing.is_none(),
+        };
+        for happened in tracker.observe(seen, secrets::now_secs(), elapsed) {
+            app.on_play(happened);
+        }
         // Quit from the tray or a media widget.
         if desktop.obey(player)? {
             return Ok(Exit::Quit);

@@ -164,7 +164,7 @@ pub fn rename(from: &Path, to: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn to_jspf(t: &Track) -> Value {
+pub(crate) fn to_jspf(t: &Track) -> Value {
     let mut ids = Vec::new();
     match t.source {
         Source::Spotify => ids.push(t.uri.clone()),
@@ -233,7 +233,7 @@ pub fn load(path: &Path, db: &Db) -> Result<(String, Vec<Track>)> {
     Ok((name, tracks))
 }
 
-fn from_jspf(v: &Value, db: &Db) -> Option<Track> {
+pub(crate) fn from_jspf(v: &Value, db: &Db) -> Option<Track> {
     let s = |key: &str| {
         v.get(key)
             .and_then(Value::as_str)

@@ -61,6 +61,7 @@ pub enum Id {
     YouTube,
     LastFm,
     ListenBrainz,
+    ScrobbleSpotify,
     Theme,
     AlbumArt,
     Visualizer,
@@ -178,6 +179,8 @@ pub struct Facts {
     /// Who's signed in to Last.fm and ListenBrainz.
     pub lastfm: Option<String>,
     pub listenbrainz: Option<String>,
+    /// How sending plays is going: Last.fm, then ListenBrainz.
+    pub scrobbling: [crate::scrobble::Report; 2],
     /// The Omarchy themes installed, and the one Omarchy is using.
     pub themes: Vec<crate::theme::Installed>,
     pub omarchy_theme: Option<String>,
@@ -344,7 +347,15 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         )
         .button("Connect"),
     });
-    // Integrations: where your plays are sent.
+    // Integrations: where your plays are sent, and how that's going.
+    let sending = |report: &crate::scrobble::Report| {
+        use crate::status::{Health, Status};
+        Some(match (&report.problem, report.waiting) {
+            (Some(_), _) => Status::new(Health::Bad, "sign in again"),
+            (None, 0) => Status::new(Health::Good, "sending plays"),
+            (None, n) => Status::new(Health::Warning, format!("{n} waiting to send")),
+        })
+    };
     rows.push(match &facts.lastfm {
         Some(user) => Row::new(
             INTEGRATIONS,
@@ -352,6 +363,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             Id::LastFm,
             Value::Text(format!("Connected as {user}")),
         )
+        .status(sending(&facts.scrobbling[0]))
         .button("Sign out"),
         None => Row::new(
             INTEGRATIONS,
@@ -368,6 +380,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             Id::ListenBrainz,
             Value::Text(format!("Connected as {user}")),
         )
+        .status(sending(&facts.scrobbling[1]))
         .button("Sign out"),
         None => Row::new(
             INTEGRATIONS,
@@ -377,6 +390,15 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         )
         .button("Connect"),
     });
+    rows.push(
+        Row::new(
+            INTEGRATIONS,
+            "Spotify plays",
+            Id::ScrobbleSpotify,
+            on_off(config.scrobble.spotify),
+        )
+        .note("off if Spotify already sends them"),
+    );
     // Appearance
     rows.push(Row::new(
         APPEARANCE,
@@ -719,6 +741,7 @@ impl Settings {
             }
             Id::Visualizer => config.appearance.visualizer = on,
             Id::AutoUpdate => config.updates.auto = on,
+            Id::ScrobbleSpotify => config.scrobble.spotify = on,
             Id::Animation => {
                 let kinds = crate::animation::Kind::ALL;
                 config.appearance.animation = kinds[n.min(kinds.len() - 1)];
@@ -951,6 +974,59 @@ mod tests {
             row(&waiting, &config, Id::AutoUpdate).value,
             Value::Choice(_, 1)
         ));
+    }
+
+    #[test]
+    fn integrations_say_how_sending_plays_is_going() {
+        use crate::scrobble::Report;
+        use crate::status::Health;
+        let mut config = Config::default();
+        let facts = |reports: [Report; 2]| Facts {
+            lastfm: Some("me".into()),
+            listenbrainz: Some("me".into()),
+            scrobbling: reports,
+            ..Facts::default()
+        };
+        let health = |facts: &Facts, config: &Config, id: Id| {
+            let row = rows(config, facts)
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap();
+            row.status.map(|s| (s.health, s.word))
+        };
+        let waiting = Report {
+            waiting: 3,
+            problem: None,
+        };
+        let refused = Report {
+            waiting: 1,
+            problem: Some("connect again".into()),
+        };
+        let f = facts([waiting, refused]);
+        assert_eq!(
+            health(&f, &config, Id::LastFm),
+            Some((Health::Warning, "3 waiting to send".into()))
+        );
+        assert_eq!(
+            health(&f, &config, Id::ListenBrainz),
+            Some((Health::Bad, "sign in again".into()))
+        );
+        let f = facts(Default::default());
+        assert_eq!(
+            health(&f, &config, Id::LastFm),
+            Some((Health::Good, "sending plays".into()))
+        );
+
+        // Spotify plays: sent unless switched off.
+        assert!(config.scrobble.spotify);
+        let all = rows(&config, &f);
+        let mut s = Settings::new(&all);
+        s.sel = all
+            .iter()
+            .position(|r| r.id == Id::ScrobbleSpotify)
+            .unwrap();
+        assert_eq!(s.change(&mut config, &all, 1), Outcome::Saved);
+        assert!(!config.scrobble.spotify);
     }
 
     #[test]

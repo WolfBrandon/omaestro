@@ -496,6 +496,24 @@ pub(super) fn draw_file_info(
         plain,
         &mut y,
     );
+    let played = match info.played {
+        (0, _) => "not yet".to_string(),
+        (n, last) => {
+            let times = if n == 1 {
+                "once".to_string()
+            } else {
+                format!("{n} times")
+            };
+            let last = last.map_or(String::new(), |t| {
+                format!(
+                    " · last played {}",
+                    age(std::time::UNIX_EPOCH + std::time::Duration::from_secs(t))
+                )
+            });
+            format!("{times}{last}")
+        }
+    };
+    row(buf, "Played", &played, plain, &mut y);
     row(buf, "ISRC", &track.isrc, fg(t.dim), &mut y);
     row(buf, "MusicBrainz", &track.mb_track_id, fg(t.dim), &mut y);
     y += 1;
@@ -1575,18 +1593,37 @@ pub(super) fn draw_open(
     };
     let entries: Vec<(String, String)> = match open.tab {
         Source::Local => {
-            if open.local.is_empty() {
+            if open.local.is_empty() && open.plays.is_none() {
                 note(buf, "No saved playlists yet. S saves the queue as one.");
             }
-            open.local
-                .iter()
-                .map(|p| {
-                    (
-                        p.name.clone(),
-                        format!("{} · {}", plural(p.tracks, "track"), age(p.modified)),
+            // First the lists made from your plays, once there are some.
+            let mut entries = Vec::new();
+            if let Some((songs, last)) = open.plays {
+                let songs = plural(songs.min(crate::plays::LIST_SIZE), "song");
+                let last = last.map_or(String::new(), |t| {
+                    format!(
+                        " · last played {}",
+                        age(std::time::UNIX_EPOCH + std::time::Duration::from_secs(t))
                     )
-                })
-                .collect()
+                });
+                for (list, icon) in crate::app::PLAY_LISTS
+                    .iter()
+                    .zip(["\u{f02da}", "\u{f04ce}"])
+                {
+                    let about = match list {
+                        crate::plays::List::Recent => format!("{songs}{last}"),
+                        crate::plays::List::Most => songs.clone(),
+                    };
+                    entries.push((format!("{icon} {}", list.name()), about));
+                }
+            }
+            entries.extend(open.local.iter().map(|p| {
+                (
+                    p.name.clone(),
+                    format!("{} · {}", plural(p.tracks, "track"), age(p.modified)),
+                )
+            }));
+            entries
         }
         Source::Spotify | Source::YouTube => {
             let listing = if open.tab == Source::Spotify {

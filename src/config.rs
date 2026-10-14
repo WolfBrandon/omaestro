@@ -21,6 +21,22 @@ pub struct Config {
     pub outputs: Outputs,
     pub sonos: Sonos,
     pub updates: Updates,
+    pub scrobble: Scrobble,
+}
+
+/// Sending plays to Last.fm and ListenBrainz (connected in Settings → Integrations).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Scrobble {
+    /// Send Spotify plays too. Off if Spotify already sends them itself (linked in Spotify's
+    /// settings), so they don't count twice.
+    pub spotify: bool,
+}
+
+impl Default for Scrobble {
+    fn default() -> Self {
+        Scrobble { spotify: true }
+    }
 }
 
 /// What happens when a new version is installed (with install.sh) while OMAESTRO runs.
@@ -140,6 +156,7 @@ impl Default for Config {
             outputs: Outputs::default(),
             sonos: Sonos::default(),
             updates: Updates::default(),
+            scrobble: Scrobble::default(),
         }
     }
 }
@@ -228,7 +245,16 @@ fn xdg_dir(name: &str, fallback: &str) -> PathBuf {
 }
 
 pub fn config_dir() -> PathBuf {
+    if cfg!(test) {
+        return test_home().join("config");
+    }
     xdg_dir("XDG_CONFIG_HOME", ".config")
+}
+
+/// Where the tests keep settings, sign-ins, playlists and plays: a folder of their own in
+/// /tmp, never yours. (A test once signed a real Last.fm account out.)
+fn test_home() -> PathBuf {
+    std::env::temp_dir().join(format!("omaestro-tests-{}", std::process::id()))
 }
 
 /// Makes `dir` if needed, and makes it readable only by you (sign-ins and sockets live in
@@ -248,6 +274,9 @@ pub fn private_dir(dir: &std::path::Path) -> std::io::Result<PathBuf> {
 
 /// Things worth keeping: playlists.
 pub fn data_dir() -> PathBuf {
+    if cfg!(test) {
+        return test_home().join("data");
+    }
     xdg_dir("XDG_DATA_HOME", ".local/share")
 }
 
@@ -274,6 +303,16 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tests never read, write or delete your real settings, sign-ins or playlists.
+    #[test]
+    fn tests_keep_away_from_your_settings() {
+        let tmp = std::env::temp_dir();
+        assert!(config_dir().starts_with(&tmp), "{}", config_dir().display());
+        assert!(data_dir().starts_with(&tmp));
+        assert!(crate::secrets::path("lastfm.json").starts_with(&tmp));
+        assert!(crate::playlist::dir().starts_with(&tmp));
+    }
 
     #[test]
     fn album_art_reads_old_and_new_settings() {

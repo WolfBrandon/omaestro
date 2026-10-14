@@ -16,12 +16,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const LASTFM_API: &str = "https://ws.audioscrobbler.com/2.0/";
+pub const LASTFM_API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Where you make the free API account Last.fm sign-in needs.
 pub const LASTFM_CREATE: &str = "https://www.last.fm/api/account/create";
 /// Where your ListenBrainz token is.
 pub const LISTENBRAINZ_SETTINGS: &str = "https://listenbrainz.org/settings/";
-const LISTENBRAINZ_API: &str = "https://api.listenbrainz.org/1";
+pub const LISTENBRAINZ_API: &str = "https://api.listenbrainz.org/1";
 
 const LASTFM_FILE: &str = "lastfm.json";
 const LISTENBRAINZ_FILE: &str = "listenbrainz.json";
@@ -76,7 +76,8 @@ impl ListenBrainz {
     }
 }
 
-fn http() -> ureq::Agent {
+/// An agent that hands back every answer, errors included, so a service's reason can be read.
+pub(crate) fn http() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .http_status_as_error(false)
@@ -105,15 +106,25 @@ pub fn api_sig(params: &[(&str, &str)], secret: &str) -> String {
 /// A signed Last.fm request, as GET (for reading) or POST (for changes). Returns Last.fm's
 /// answer, which may be an error it explains.
 pub fn lastfm_call(params: &[(&str, &str)], secret: &str, post: bool) -> Result<Value, String> {
+    lastfm_call_at(LASTFM_API, params, secret, post)
+}
+
+/// `lastfm_call`, to `api` (the tests' stand-in for Last.fm).
+pub fn lastfm_call_at(
+    api: &str,
+    params: &[(&str, &str)],
+    secret: &str,
+    post: bool,
+) -> Result<Value, String> {
     let sig = api_sig(params, secret);
     let mut all: Vec<(&str, &str)> = params.to_vec();
     all.push(("api_sig", &sig));
     all.push(("format", "json"));
     let http = http();
     let reply = if post {
-        http.post(LASTFM_API).send_form(all.iter().copied())
+        http.post(api).send_form(all.iter().copied())
     } else {
-        let mut req = http.get(LASTFM_API);
+        let mut req = http.get(api);
         for (k, v) in &all {
             req = req.query(*k, *v);
         }
