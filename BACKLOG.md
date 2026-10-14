@@ -3,6 +3,17 @@
 Ideas for later, roughly in the order they came up. Done ones move to
 [CHANGELOG.md](CHANGELOG.md).
 
+## Next: a taskbar companion for Omarchy (1.0.0)
+
+OMAESTRO stays at 0.9.x until this is done. A module for Omarchy's bar (Waybar) to go with
+the tray icon:
+- **Shows** what's playing, and where: title · artist, and the G560, a Sonos room, and so on.
+- **Click** to bring OMAESTRO back (`omaestro launch`).
+- **Scroll** for volume; middle-click or right-click to play/pause or skip.
+- **Builds on** what's already there: MPRIS for the controls, plus a small `omaestro bar`
+  command printing Waybar's JSON when something changes.
+- **Setup:** `install.sh` could offer to add it to the bar's config, backing that up first.
+
 ## File Info
 
 A small pop-up with everything about the highlighted song. It would open from the queue,
