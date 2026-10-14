@@ -7,7 +7,7 @@ ticked here and described in [CHANGELOG.md](CHANGELOG.md).
 In the order they'll be built:
 
 - [x] **Connection status**: a dot and a word for each source (0.9.2).
-- [ ] **File Info**: everything about a song, in a pop-up.
+- [x] **File Info**: everything about a song, in a pop-up (0.9.3).
 - [ ] **Update in place**: switch to a new version without closing and reopening.
 - [ ] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
   ListenBrainz.
@@ -28,17 +28,6 @@ bar's right side, just before the tray:
   running OMAESTRO over a small local socket.
 - **Setup:** `install.sh` copies the plugin into `~/.config/omarchy/plugins/omaestro` and adds
   it to the bar's layout in `~/.config/omarchy/shell.json`, backing that up first.
-
-## File Info
-
-A small pop-up with everything about a song. It opens with `i` or a right-click, in the queue,
-the browser and Search.
-
-What it would show:
-- **Song:** title, artist, album artist, album (year), track and disc number, genre, length.
-- **File:** where it lives (copyable), size, format, bit depth, sample rate, bitrate,
-  ReplayGain.
-- **Spotify and YouTube Music songs:** the song's link instead of a file path.
 
 ## Sort by popularity
 

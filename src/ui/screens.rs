@@ -402,6 +402,217 @@ pub(super) fn draw_search(
     hints(buf, inner, inner.x + 1, inner.bottom() - 1, pairs, t);
 }
 
+// ---- File Info -----------------------------------------------------------------------
+
+/// The end of `text` in `w` columns, starting "…" when cut: for paths, whose end matters.
+fn fit_end(text: &str, w: u16) -> String {
+    if width(text) <= w {
+        return text.to_string();
+    }
+    let mut shown = text;
+    while width(shown) + 1 > w && !shown.is_empty() {
+        let mut chars = shown.chars();
+        chars.next();
+        shown = chars.as_str();
+    }
+    format!("…{shown}")
+}
+
+/// File Info: everything about one song.
+pub(super) fn draw_file_info(
+    buf: &mut Buffer,
+    screen: Rect,
+    info: &crate::app::FileInfo,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    use crate::fileinfo;
+    let track = &info.track;
+    let local = track.source == Source::Local;
+    let w = screen.width.saturating_sub(4).min(80);
+    let h = screen.height.saturating_sub(2).min(24);
+    let inner = popup(buf, centred(screen, w, h), "FILE INFO", t, hit);
+    if inner.width < 30 || inner.height < 8 {
+        return;
+    }
+    let x = inner.x + 2;
+    let value_x = x + 15;
+    let room = inner.right().saturating_sub(value_x + 2);
+    let mut y = inner.y + 1;
+
+    let (icon, color) = source_icon(track.source, t);
+    let after = put(buf, inner, x, y, icon, fg(color));
+    put(
+        buf,
+        inner,
+        after + 2,
+        y,
+        &fit(&track.title, room + 12),
+        bold(t.bright),
+    );
+    y += 1;
+    put(
+        buf,
+        inner,
+        x + 3,
+        y,
+        &fit(&track.artist, room + 12),
+        fg(t.light),
+    );
+    y += 2;
+
+    let row = |buf: &mut Buffer, label: &str, value: &str, style: Style, y: &mut u16| {
+        if value.is_empty() || *y + 2 >= inner.bottom() {
+            return;
+        }
+        put(buf, inner, x, *y, label, fg(t.dim));
+        put(buf, inner, value_x, *y, &fit(value, room), style);
+        *y += 1;
+    };
+    let plain = fg(t.fg);
+    put(buf, inner, x, y, "SONG", bold(t.dim));
+    y += 1;
+    row(
+        buf,
+        "Album",
+        &album_year(&track.album, track.year),
+        plain,
+        &mut y,
+    );
+    if track.album_artist != track.artist {
+        row(buf, "Album artist", &track.album_artist, plain, &mut y);
+    }
+    let number = match (track.track_no, track.disc_no) {
+        (Some(n), Some(d)) if d > 1 => format!("{n} · disc {d}"),
+        (Some(n), _) => n.to_string(),
+        _ => String::new(),
+    };
+    row(buf, "Track", &number, plain, &mut y);
+    row(buf, "Genre", &track.genre, plain, &mut y);
+    row(
+        buf,
+        "Length",
+        &clock(track.duration_ms as f64 / 1000.0),
+        plain,
+        &mut y,
+    );
+    row(buf, "ISRC", &track.isrc, fg(t.dim), &mut y);
+    row(buf, "MusicBrainz", &track.mb_track_id, fg(t.dim), &mut y);
+    y += 1;
+
+    if local {
+        put(buf, inner, x, y, "FILE", bold(t.dim));
+        y += 1;
+        put(buf, inner, x, y, "Path", fg(t.dim));
+        let pill_w = width("Copy") + 4;
+        let path_room = room.saturating_sub(pill_w + 1);
+        let end = put(
+            buf,
+            inner,
+            value_x,
+            y,
+            &fit_end(&track.path, path_room),
+            fg(t.light),
+        );
+        let area = pill(buf, inner, end + 1, y, "Copy", t);
+        hit(area, Target::InfoCopy);
+        y += 1;
+        let ext = std::path::Path::new(&track.path)
+            .extension()
+            .map(|e| e.to_string_lossy().to_uppercase())
+            .unwrap_or_default();
+        let format = [
+            ext,
+            track
+                .bit_depth
+                .map(|b| format!("{b}-bit"))
+                .unwrap_or_default(),
+            track
+                .sample_rate
+                .map(|r| format!("{} kHz", r as f64 / 1000.0))
+                .unwrap_or_default(),
+        ]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+        row(buf, "Format", &format, plain, &mut y);
+        match &info.details {
+            None => {
+                let style = fg(t.dim).add_modifier(Modifier::ITALIC);
+                put(buf, inner, value_x, y, "Reading the file…", style);
+                y += 1;
+            }
+            Some(Err(e)) => {
+                let style = fg(t.yellow).add_modifier(Modifier::ITALIC);
+                put(
+                    buf,
+                    inner,
+                    value_x,
+                    y,
+                    &fit(&format!("Can't read it: {e}"), room),
+                    style,
+                );
+                y += 1;
+            }
+            Some(Ok(d)) => {
+                let bitrate = d
+                    .bitrate
+                    .map(|b| format!("{} kbps", crate::app::group_thousands(b as usize)))
+                    .unwrap_or_default();
+                row(buf, "Bitrate", &bitrate, plain, &mut y);
+                row(
+                    buf,
+                    "Channels",
+                    &d.channels.map(fileinfo::channels).unwrap_or_default(),
+                    plain,
+                    &mut y,
+                );
+                row(
+                    buf,
+                    "Size",
+                    &d.size.map(fileinfo::size).unwrap_or_default(),
+                    plain,
+                    &mut y,
+                );
+                let gain = match (&d.track_gain, &d.album_gain) {
+                    (None, None) => "none".to_string(),
+                    (t, a) => [
+                        t.as_ref().map(|g| format!("track {g}")),
+                        a.as_ref().map(|g| format!("album {g}")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                };
+                row(buf, "ReplayGain", &gain, plain, &mut y);
+            }
+        }
+    } else if let Some(link) = fileinfo::link(track) {
+        put(buf, inner, x, y, "LINK", bold(t.dim));
+        y += 1;
+        let pills_w = width("Open") + width("Copy") + 9;
+        let style = fg(t.accent).add_modifier(Modifier::UNDERLINED);
+        let end = put(
+            buf,
+            inner,
+            x,
+            y,
+            &fit(&link, inner.width.saturating_sub(pills_w + 5)),
+            style,
+        );
+        let open = pill(buf, inner, end + 2, y, "Open", t);
+        hit(open, Target::InfoOpen);
+        let copy = pill(buf, inner, open.right() + 1, y, "Copy", t);
+        hit(copy, Target::InfoCopy);
+    }
+    let _ = y;
+    let open_what = if local { "open folder" } else { "open" };
+    let pairs = [("c", "copy"), ("o", open_what), ("Esc", "close")];
+    hints(buf, inner, inner.x + 1, inner.bottom() - 1, &pairs, t);
+}
+
 // ---- Settings ------------------------------------------------------------------------
 
 /// A source's health as a colour: good, worrying, broken, or not set up.

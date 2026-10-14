@@ -3,6 +3,17 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.3 — 2026-10-14
+
+- **File Info:** `i`, or a right-click on a song, in the queue, the browser or Search.
+  - **The song:** album (year), album artist, track and disc, genre, length, ISRC and its
+    MusicBrainz ID.
+  - **For files:** the path, format, bitrate, channels, size and ReplayGain. These are read
+    from the file in the background, with a time limit.
+  - **For Spotify and YouTube Music songs:** their link.
+  - `c` copies the path or link, and `o` opens the song's folder or page. Opened from Search,
+    closing it goes back to Search.
+
 ## 0.9.2 — 2026-10-14
 
 - **Connection status**, the first item on the road to 1.0.0: a coloured dot and a word for

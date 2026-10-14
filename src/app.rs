@@ -118,6 +118,11 @@ pub enum News {
     },
     /// How each source is doing.
     Sources(crate::status::Statuses),
+    /// A file's own details, read for File Info.
+    FileDetails {
+        path: String,
+        result: Result<crate::fileinfo::Details, String>,
+    },
     /// A service's playlist, fetched to go in the queue.
     Imported {
         name: String,
@@ -212,6 +217,8 @@ fn listing_len(l: &Listing) -> usize {
 /// A box drawn over the screen. Only one at a time.
 pub enum Overlay {
     Help,
+    /// File Info for one song.
+    FileInfo(Box<FileInfo>),
     /// The queue's show/hide-columns menu; the highlighted row.
     Columns(usize),
     /// The output picker: the highlighted row, and whether hidden outputs show.
@@ -274,6 +281,9 @@ pub enum Target {
     SearchBox,
     /// The × at the top right of Search and Settings.
     CloseOverlay,
+    /// File Info's Copy (the path or link) and Open (the folder or link) buttons.
+    InfoCopy,
+    InfoOpen,
     /// The find box at the top of Settings.
     SettingsFind,
     SearchChip(Source),
@@ -310,6 +320,8 @@ impl Target {
                 | Target::OpenTab(_)
                 | Target::SearchBox
                 | Target::CloseOverlay
+                | Target::InfoCopy
+                | Target::InfoOpen
                 | Target::SettingsFind
                 | Target::SearchChip(_)
                 | Target::SearchRow(_)
@@ -343,6 +355,13 @@ pub fn hit_at(hits: &[Hit], x: u16, y: u16) -> Option<Hit> {
 fn fraction(area: Rect, x: u16) -> f64 {
     let span = area.width.saturating_sub(1).max(1) as f64;
     (x.saturating_sub(area.x) as f64 / span).clamp(0.0, 1.0)
+}
+
+/// File Info: the song, the file's own details once read, and what it was opened over.
+pub struct FileInfo {
+    pub track: Track,
+    pub details: Option<Result<crate::fileinfo::Details, String>>,
+    pub back: Option<Box<Overlay>>,
 }
 
 /// Something being dragged with the mouse.
@@ -1007,6 +1026,76 @@ impl App {
 
     // ---- settings and signing in -----------------------------------------------------
 
+    /// The song highlighted in the browser's results or song list, if it's a song.
+    fn browse_song(&self) -> Option<Track> {
+        match self.browse.pane {
+            Pane::Songs => self.browse.tracks.get(self.browse.track_sel).cloned(),
+            Pane::Results => match self.browse.selected() {
+                Some(crate::browse::Row::Song(n)) => self.browse.songs.get(*n).cloned(),
+                _ => None,
+            },
+            Pane::Search => None,
+        }
+    }
+
+    /// File Info for a song: what's known now, and the file's own details read in the
+    /// background (with a time limit, in case its folder is on a NAS that's gone away).
+    pub fn open_file_info(&mut self, track: Track) {
+        if track.source == Source::Local {
+            let path = track.path.clone();
+            let news = self.news.clone();
+            std::thread::spawn(move || {
+                let file = PathBuf::from(&path);
+                let result = crate::status::within(Duration::from_secs(4), move || {
+                    crate::fileinfo::read(&file)
+                })
+                .unwrap_or_else(|| Err("the file isn't answering".into()));
+                let _ = news.send(News::FileDetails { path, result });
+            });
+        }
+        let back = self.overlay.take().map(Box::new);
+        self.overlay = Some(Overlay::FileInfo(Box::new(FileInfo {
+            track,
+            details: None,
+            back,
+        })));
+    }
+
+    /// Closes File Info, back to what it was opened from (Search).
+    fn close_file_info(&mut self) {
+        if let Some(Overlay::FileInfo(info)) = self.overlay.take() {
+            self.overlay = info.back.map(|b| *b);
+        }
+    }
+
+    /// Copies the song's path (or, for a streamed song, its web address).
+    fn file_info_copy(&mut self) {
+        let Some(Overlay::FileInfo(info)) = &self.overlay else {
+            return;
+        };
+        let text = crate::fileinfo::link(&info.track).unwrap_or_else(|| info.track.path.clone());
+        self.status = match secrets::copy_to_clipboard(&text) {
+            Ok(()) => "Copied to the clipboard".into(),
+            Err(_) => format!("Couldn't copy; it's {text}"),
+        };
+    }
+
+    /// Opens the song's folder (or, for a streamed song, its page).
+    fn file_info_open(&mut self) {
+        let Some(Overlay::FileInfo(info)) = &self.overlay else {
+            return;
+        };
+        let target = crate::fileinfo::link(&info.track).unwrap_or_else(|| {
+            std::path::Path::new(&info.track.path)
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        });
+        if let Err(e) = secrets::open_in_browser(&target) {
+            self.status = format!("{e:#}");
+        }
+    }
+
     /// Time to see how the sources are doing: every two minutes.
     pub fn sources_due(&self) -> bool {
         !self.checking_sources
@@ -1358,6 +1447,13 @@ impl App {
                 }
                 Err(e) => self.sonos_status = e,
             },
+            News::FileDetails { path, result } => {
+                if let Some(Overlay::FileInfo(info)) = &mut self.overlay
+                    && info.track.path == path
+                {
+                    info.details = Some(result);
+                }
+            }
             News::Sources(statuses) => {
                 self.statuses = statuses;
                 self.checking_sources = false;
@@ -1425,6 +1521,13 @@ impl App {
         if self.overlay.is_some() {
             return self.overlay_key(key, ctx);
         }
+        // i in the browser's results or songs: File Info for the highlighted song.
+        if self.browse_open && self.browse.pane != Pane::Search && key.code == KeyCode::Char('i') {
+            if let Some(track) = self.browse_song() {
+                self.open_file_info(track);
+            }
+            return Ok(None);
+        }
         if self.browse_open {
             match self.browse.on_key(key, &self.catalog, &self.db)? {
                 Step::Stay => return Ok(None),
@@ -1475,6 +1578,12 @@ impl App {
         let here = (self.queue_sel < ctx.queue.len()).then_some(self.queue_sel);
         match key.code {
             KeyCode::Enter => here.map(Action::Jump),
+            KeyCode::Char('i') => {
+                if let Some(track) = here.and_then(|i| ctx.queue.get(i)).cloned() {
+                    self.open_file_info(track);
+                }
+                None
+            }
             KeyCode::Char('d') | KeyCode::Delete => here.map(Action::Remove),
             KeyCode::Char('K') => here.map(|i| Action::Move(i, true)),
             KeyCode::Char('J') => here.map(|i| Action::Move(i, false)),
@@ -1498,10 +1607,31 @@ impl App {
     }
 
     fn overlay_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Result<Option<Action>> {
+        // File Info: c copies, o opens, anything else closes it.
+        if matches!(self.overlay, Some(Overlay::FileInfo(_))) {
+            match key.code {
+                KeyCode::Char('c') => self.file_info_copy(),
+                KeyCode::Char('o') => self.file_info_open(),
+                _ => self.close_file_info(),
+            }
+            return Ok(None);
+        }
+        // i in Search's results: File Info for the highlighted song.
+        if matches!(self.overlay, Some(Overlay::Search))
+            && !self.search.typing
+            && key.code == KeyCode::Char('i')
+        {
+            if let Some(track) = self.search.selected() {
+                self.open_file_info(track);
+            }
+            return Ok(None);
+        }
         let Some(overlay) = self.overlay.as_mut() else {
             return Ok(None);
         };
         match overlay {
+            // Handled above.
+            Overlay::FileInfo(_) => {}
             // Any key closes the help.
             Overlay::Help => self.overlay = None,
             Overlay::Columns(sel) => {
@@ -1705,6 +1835,26 @@ impl App {
                 self.last_click = if double { None } else { Some((pressed, now)) };
                 return self.click(pressed, double, ctx);
             }
+            // A right-click on a song: its File Info.
+            MouseEventKind::Down(MouseButton::Right) => {
+                let track = match target {
+                    Some(Target::Queue(i)) => ctx.queue.get(i).cloned(),
+                    Some(Target::SearchRow(i)) => {
+                        let rows = self.search.rows();
+                        rows.get(i).and_then(|r| self.search.song(r)).cloned()
+                    }
+                    Some(Target::Result(i)) => match self.browse.rows.get(i) {
+                        Some(crate::browse::Row::Song(n)) => self.browse.songs.get(*n).cloned(),
+                        _ => None,
+                    },
+                    Some(Target::Song(i)) => self.browse.tracks.get(i).cloned(),
+                    _ => None,
+                };
+                if let Some(track) = track {
+                    self.open_file_info(track);
+                }
+                return Ok(None);
+            }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let delta = if m.kind == MouseEventKind::ScrollDown {
                     1
@@ -1811,6 +1961,14 @@ impl App {
             }
             Target::CloseOverlay => {
                 self.overlay = None;
+                None
+            }
+            Target::InfoCopy => {
+                self.file_info_copy();
+                None
+            }
+            Target::InfoOpen => {
+                self.file_info_open();
                 None
             }
             Target::SettingsFind => {
@@ -2579,6 +2737,56 @@ pub mod tests {
             Some(Action::Settings { rescan: false })
         );
         assert_eq!(app.config.appearance.theme, "tokyo-night");
+    }
+
+    #[test]
+    fn file_info_opens_from_the_queue_search_and_a_right_click() {
+        let tmp = TempDir::new("app-fileinfo");
+        let mut app = app(&tmp);
+        let queue = app.browse.tracks.clone();
+        let ctx = Ctx {
+            queue: &queue,
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+        };
+        let shows = |app: &App| match &app.overlay {
+            Some(Overlay::FileInfo(info)) => Some(info.track.title.clone()),
+            _ => None,
+        };
+        // i on the highlighted queue song.
+        app.queue_sel = 1;
+        press(&mut app, KeyCode::Char('i'), &ctx);
+        assert_eq!(shows(&app), Some(queue[1].title.clone()));
+        // Any other key closes it.
+        press(&mut app, KeyCode::Esc, &ctx);
+        assert!(app.overlay.is_none());
+
+        // A right-click on a queue row.
+        let hits = [Hit {
+            area: Rect::new(0, 10, 80, 1),
+            target: Target::Queue(0),
+        }];
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Right),
+            5,
+            10,
+            &hits,
+            &ctx,
+        );
+        assert_eq!(shows(&app), Some(queue[0].title.clone()));
+        press(&mut app, KeyCode::Esc, &ctx);
+
+        // From Search's results: closing goes back to Search.
+        app.overlay = Some(Overlay::Search);
+        app.search.typing = false;
+        app.search.found[0] = search::Found::Songs(queue.clone(), queue.len());
+        app.search.settle();
+        press(&mut app, KeyCode::Char('i'), &ctx);
+        assert_eq!(shows(&app), Some(queue[0].title.clone()));
+        press(&mut app, KeyCode::Esc, &ctx);
+        assert!(matches!(app.overlay, Some(Overlay::Search)));
     }
 
     #[test]

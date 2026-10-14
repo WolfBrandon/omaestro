@@ -245,6 +245,7 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
     }
     match &app.overlay {
         Some(Overlay::Help) => draw_help(buf, area, t, &mut hit),
+        Some(Overlay::FileInfo(info)) => screens::draw_file_info(buf, area, info, t, &mut hit),
         Some(Overlay::Columns(sel)) => draw_columns_menu(buf, area, app, *sel, t, &mut hit),
         Some(Overlay::Picker { sel, all }) => {
             draw_picker(buf, area, a.output, app, player, *sel, *all, t, &mut hit)
@@ -1428,6 +1429,10 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("o", "Choose where to play (this computer or Sonos)"),
         ("m", "Minimize to the tray (Hyprland)"),
         ("F2", "Settings (the gear button too; / finds a setting)"),
+        (
+            "i",
+            "File Info for the highlighted song (or right-click it)",
+        ),
         ("r", "Check the music folders for changes"),
         ("q", "Quit (the music stops)"),
         ("", ""),
@@ -1832,6 +1837,18 @@ mod tests {
                 app.on_key(KeyEvent::from(KeyCode::Enter), &ctx).unwrap();
             }
             "settings" => app.open_settings(),
+            // File Info for the first song of a search, with the file read straight away.
+            "info" => {
+                keys(&mut app, "bblack keys");
+                app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
+                let track = app.browse.tracks[0].clone();
+                let details = crate::fileinfo::read(std::path::Path::new(&track.path));
+                app.on_key(KeyEvent::from(KeyCode::Esc), &ctx).unwrap();
+                app.open_file_info(track);
+                if let Some(Overlay::FileInfo(info)) = &mut app.overlay {
+                    info.details = Some(details);
+                }
+            }
             // Settings at Appearance, on the theme row.
             "themes" => {
                 app.open_settings();

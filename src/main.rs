@@ -8,6 +8,7 @@ mod columns;
 mod config;
 mod connect;
 mod desktop;
+mod fileinfo;
 mod library;
 mod player;
 mod playlist;
