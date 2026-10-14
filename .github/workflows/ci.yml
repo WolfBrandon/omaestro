@@ -12,7 +12,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # mpv and ffmpeg let the tests that play (silently, into a null output) run instead of
       # skipping.
       - name: Install mpv and ffmpeg
