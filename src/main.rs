@@ -3,6 +3,7 @@
 mod app;
 mod art;
 mod browse;
+mod columns;
 mod config;
 mod connect;
 mod desktop;
@@ -41,7 +42,9 @@ use theme::ThemeFile;
 const USAGE: &str = "\
 usage: omaestro [command]
 
-  (no command)      open the player
+  (no command)      open the player in this terminal
+  launch            bring back the running player, or open it in a new window
+                    (what the app launcher runs)
   scan              update the library index from the music folders
   search WORDS…     search the library index
   stats             show what's in the index
@@ -51,6 +54,7 @@ usage: omaestro [command]
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("launch") => desktop::launch(),
         Some("scan") => cmd_scan(),
         Some("search") => cmd_search(&args[1..].join(" ")),
         Some("stats") => cmd_stats(),
@@ -513,6 +517,7 @@ fn apply(
             app.queue_sel = index.min(player.queue().len().saturating_sub(1));
         }
         Action::Move(index, up) => app.queue_sel = player.move_track(index, up)?,
+        Action::MoveTo(from, to) => app.queue_sel = player.move_to(from, to)?,
         Action::Undo => {
             app.status = match player.undo()? {
                 Some(what) => format!("Undone: {what}"),

@@ -196,7 +196,13 @@ fn draw_results(
             }
             Row::Album(n) => {
                 let album = &b.albums[*n];
-                two(buf, y, &album.title, &album.artist, name);
+                two(
+                    buf,
+                    y,
+                    &album_year(&album.title, album.year),
+                    &album.artist,
+                    name,
+                );
             }
             Row::Song(n) => {
                 let song = &b.songs[*n];
@@ -297,16 +303,16 @@ fn draw_songs(
             title,
         );
         let other = if b.tracks_by_artist {
-            &track.album
+            album_year(&track.album, track.year)
         } else {
-            &track.artist
+            track.artist.clone()
         };
         put(
             buf,
             p,
             col2,
             y,
-            &fit(other, format_x.saturating_sub(col2 + 2)),
+            &fit(&other, format_x.saturating_sub(col2 + 2)),
             fg(t.fg),
         );
         let format = short_format(track.bit_depth, track.sample_rate);

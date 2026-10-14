@@ -24,7 +24,28 @@ What hasn't been tried on the real thing yet: Spotify playback (needs your Spoti
 Soloist key), playing on Sonos (needs the firewall line below), and minimizing (needs
 OMAESTRO in its own window). See "First-time setup".
 
-## Run it
+## Install it as an app
+
+```
+cd ~/projects/local/omaestro
+./install.sh                   # build, then add OMAESTRO to the app launcher
+```
+
+Then open it with Super+Space → OMAESTRO. Run `./install.sh` again after changes to update the
+app (the version shows at the bottom right). It puts three things in your home folder:
+
+- `~/.local/bin/omaestro`: the program (so `omaestro` also works in any terminal);
+- `~/.local/share/icons/hicolor/…/omaestro.svg` and `.png`: the icon;
+- `~/.local/share/applications/org.omarchy.omaestro.desktop`: the launcher entry.
+
+`./install.sh --uninstall` takes them away again; your settings and playlists stay.
+
+The launcher runs `omaestro launch`. If OMAESTRO is already running, even minimized, that
+brings its window back instead of opening a second one. Otherwise it opens OMAESTRO in your
+default terminal (foot) with the app-id `org.omarchy.omaestro`, so Hyprland window rules can
+pick it out. It opens tiled; for a floating window, add a rule matching that app-id.
+
+## Run it from the source
 
 ```
 cd ~/projects/local/omaestro
@@ -86,6 +107,11 @@ In the queue: `d` removes, `J`/`K` move, `u` or `Ctrl+Z` undoes, `c` clears, `s`
 saves as, `O` opens a playlist (saved ones, or your Spotify and YouTube Music playlists).
 Undo brings back the playlist's name too.
 
+With the mouse, drag a song up or down the queue to move it. Drag the `╎` marks in the
+heading row to make a column wider or narrower; the last text column gives way. Click the
+list icon at the queue's top left (or press `C`) to show or hide columns: number, source
+icon, artist, album (with its year), format and time. Column choices are saved.
+
 In the browser, typing goes into the search box. Results are grouped into artists, albums and
 songs; while more than one group shows, each lists its best matches, and `1` `2` `3` show or
 hide a group. `Tab` moves between the search box, results and songs. `Enter` (or a
@@ -117,6 +143,12 @@ volume = 100
 album_art = "hi-res"                    # "hi-res" (real pictures), "lo-res" (coloured blocks) or "off"
 visualizer = true
 
+[queue]                                 # the queue's columns (set with the mouse or C)
+hidden = []                             # e.g. ["number", "format"]
+title = 30                              # widths of the text columns; the last one shown
+artist = 22                             # takes whatever room is left
+album = 28
+
 [outputs]                               # the picker's stars and hidden ones
 favourites = []
 hidden = []
@@ -126,6 +158,12 @@ speakers = []                           # found by themselves, then remembered
 media_port = 47100
 never = []                              # speaker ids never to send anything to
 ```
+
+## Versions
+
+The version is Release.Version.Fix (shown bottom right, and by `omaestro --version`). What
+changed in each one is in [CHANGELOG.md](CHANGELOG.md); ideas for later are in
+[BACKLOG.md](BACKLOG.md).
 
 ## Files it uses
 

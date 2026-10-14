@@ -16,6 +16,8 @@ pub struct Config {
     pub scan_on_launch: bool,
     pub playback: Playback,
     pub appearance: Appearance,
+    /// The queue's columns: which show and how wide.
+    pub queue: crate::columns::QueueColumns,
     pub outputs: Outputs,
     pub sonos: Sonos,
 }
@@ -114,6 +116,7 @@ impl Default for Config {
             scan_on_launch: true,
             playback: Playback::default(),
             appearance: Appearance::default(),
+            queue: crate::columns::QueueColumns::default(),
             outputs: Outputs::default(),
             sonos: Sonos::default(),
         }

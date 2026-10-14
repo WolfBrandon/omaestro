@@ -258,7 +258,7 @@ pub(super) fn draw_search(
                     list,
                     album_x,
                     ry,
-                    &fit(&track.album, album_w),
+                    &fit(&album_year(&track.album, track.year), album_w),
                     fg(t.dim),
                 );
                 let color = if hi_res(track) { t.light } else { t.fg };

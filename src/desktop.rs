@@ -58,6 +58,42 @@ impl Mpris {
     }
 }
 
+/// The window's app-id when started from the app launcher, and the launcher entry's name.
+pub const APP_ID: &str = "org.omarchy.omaestro";
+
+/// What the app launcher runs (`omaestro launch`): brings OMAESTRO back if it's already
+/// running, even tucked away in the scratchpad, or else opens it in a new terminal window.
+pub fn launch() -> anyhow::Result<()> {
+    use std::os::unix::process::CommandExt;
+    let raised = Command::new("busctl")
+        .args([
+            "--user",
+            "call",
+            "org.mpris.MediaPlayer2.omaestro",
+            "/org/mpris/MediaPlayer2",
+            "org.mpris.MediaPlayer2",
+            "Raise",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if raised {
+        return Ok(());
+    }
+    // xdg-terminal-exec opens the default terminal (foot here) running OMAESTRO.
+    let me = std::env::current_exe()?;
+    let error = Command::new("xdg-terminal-exec")
+        .arg(format!("--app-id={APP_ID}"))
+        .arg("--title=OMAESTRO")
+        .arg("-e")
+        .arg(me)
+        .exec();
+    Err(anyhow::anyhow!(
+        "couldn't open a terminal with xdg-terminal-exec: {error}"
+    ))
+}
+
 /// Registers OMAESTRO as `org.mpris.MediaPlayer2.omaestro`.
 pub fn start_mpris(commands: mpsc::Sender<Cmd>) -> Result<Mpris, String> {
     let (tx, rx) = async_channel::unbounded::<Update>();
@@ -75,7 +111,7 @@ pub fn start_mpris(commands: mpsc::Sender<Cmd>) -> Result<Mpris, String> {
                 };
                 let player = match Player::builder(&suffix)
                     .identity("OMAESTRO")
-                    .desktop_entry("omaestro")
+                    .desktop_entry(APP_ID)
                     .can_play(true)
                     .can_pause(true)
                     .can_go_next(true)

@@ -313,6 +313,25 @@ impl Player {
         Ok(other)
     }
 
+    /// Moves a song to another place in the queue (a drag). Returns where it is now.
+    pub fn move_to(&mut self, from: usize, to: usize) -> Result<usize> {
+        if from >= self.queue.len() || from == to {
+            return Ok(from);
+        }
+        let to = to.min(self.queue.len() - 1);
+        self.remember(format!("moved {}", self.queue[from].title));
+        let track = self.queue.remove(from);
+        self.queue.insert(to, track);
+        self.current = self.current.map(|c| match c {
+            c if c == from => to,
+            c if from < c && c <= to => c - 1,
+            c if to <= c && c < from => c + 1,
+            c => c,
+        });
+        self.sync_upcoming()?;
+        Ok(to)
+    }
+
     /// Empties the queue and stops.
     pub fn clear(&mut self) -> Result<()> {
         if self.queue.is_empty() {
@@ -1122,6 +1141,16 @@ mod tests {
         assert_eq!(titles(&player), ["c", "b", "d"]);
         assert_eq!(player.current_index(), Some(0), "the ▶ moved with c");
         assert_eq!(player.move_track(0, true).unwrap(), 0, "top can't go up");
+
+        // Dragging: c (playing) to the end and back keeps the ▶ on c.
+        assert_eq!(player.move_to(0, 2).unwrap(), 2);
+        assert_eq!(titles(&player), ["b", "d", "c"]);
+        assert_eq!(player.current_index(), Some(2));
+        player.move_to(2, 0).unwrap();
+        assert_eq!(titles(&player), ["c", "b", "d"]);
+        assert_eq!(player.current_index(), Some(0));
+        player.undo().unwrap();
+        player.undo().unwrap();
 
         // Removing the song that's playing moves on to the next one.
         player.remove(0).unwrap();

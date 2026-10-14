@@ -64,6 +64,8 @@ pub enum Action {
     UseSonos,
     /// Take this queue entry out.
     Remove(usize),
+    /// Move a queue entry to another place (dragged).
+    MoveTo(usize, usize),
     /// Move a queue entry up (true) or down.
     Move(usize, bool),
     Undo,
@@ -204,6 +206,8 @@ fn listing_len(l: &Listing) -> usize {
 /// A box drawn over the screen. Only one at a time.
 pub enum Overlay {
     Help,
+    /// The queue's show/hide-columns menu; the highlighted row.
+    Columns(usize),
     /// The output picker: the highlighted row, and whether hidden outputs show.
     Picker {
         sel: usize,
@@ -265,6 +269,13 @@ pub enum Target {
     SettingsButton(usize),
     /// A browser in the YouTube Music sign-in list.
     Browser(usize),
+    /// The list icon at the queue's top left: the show/hide-columns menu.
+    ColumnsMenu,
+    /// A row of that menu.
+    ColumnItem(usize),
+    /// The right edge of a queue column's heading, dragged to resize it; where the column
+    /// starts, and the widest it can go (until the last column is as narrow as it gets).
+    ColumnEdge(crate::columns::Column, u16, u16),
     /// A web address on a sign-in screen (opens it), and its Copy button.
     Link(connect::Link),
     Copy(connect::Link),
@@ -291,6 +302,7 @@ impl Target {
                 | Target::Browser(_)
                 | Target::Link(_)
                 | Target::Copy(_)
+                | Target::ColumnItem(_)
         )
     }
 }
@@ -315,6 +327,18 @@ fn fraction(area: Rect, x: u16) -> f64 {
     (x.saturating_sub(area.x) as f64 / span).clamp(0.0, 1.0)
 }
 
+/// Something being dragged with the mouse.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Drag {
+    /// A queue row, from where it was to the row under the mouse.
+    Row { from: usize, over: usize },
+    /// A column's right edge; where the column starts.
+    Column {
+        column: crate::columns::Column,
+        start: u16,
+    },
+}
+
 /// The browser on its way up or down.
 struct Slide {
     start: Instant,
@@ -337,6 +361,10 @@ pub struct App {
     pub queue_sel: usize,
     /// First queue row on screen; kept by the screen code as the selection moves.
     pub queue_top: Cell<usize>,
+    /// What the mouse is dragging: a queue row, or a column's edge.
+    pub drag: Option<Drag>,
+    /// Where the list icon was drawn, so its menu can hang from it.
+    pub columns_anchor: Cell<Option<Rect>>,
     pub overlay: Option<Overlay>,
     /// Settings, put aside while a sign-in screen opened from it is showing.
     parked_settings: Option<Settings>,
@@ -391,6 +419,8 @@ impl App {
             latest_search: Arc::new(AtomicU64::new(0)),
             queue_sel: 0,
             queue_top: Cell::new(0),
+            drag: None,
+            columns_anchor: Cell::new(None),
             overlay: None,
             parked_settings: None,
             playlist_dir: playlist::dir(),
@@ -1332,6 +1362,10 @@ impl App {
                 self.save_as(ctx);
                 None
             }
+            KeyCode::Char('C') => {
+                self.overlay = Some(Overlay::Columns(0));
+                None
+            }
             KeyCode::Char('O') => {
                 self.open_playlists();
                 None
@@ -1347,6 +1381,21 @@ impl App {
         match overlay {
             // Any key closes the help.
             Overlay::Help => self.overlay = None,
+            Overlay::Columns(sel) => {
+                if let Some(delta) = movement(key.code) {
+                    *sel = step(*sel, crate::columns::Column::ALL.len(), delta);
+                    return Ok(None);
+                }
+                let column = crate::columns::Column::ALL[*sel];
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('C' | 'q') => self.overlay = None,
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        self.config.queue.toggle(column);
+                        return Ok(Some(Action::Settings { rescan: false }));
+                    }
+                    _ => {}
+                }
+            }
             Overlay::Picker { sel, all } => {
                 let (here, show_all) = (*sel, *all);
                 let rows = self.picker_rows(ctx, show_all);
@@ -1475,6 +1524,23 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                match (self.pressed, &mut self.drag) {
+                    // Dragging a column's edge resizes it as the mouse moves.
+                    (Some(Target::ColumnEdge(column, start, max)), _) => {
+                        let width = m.column.saturating_sub(start).min(max);
+                        self.config.queue.set_width(column, width);
+                        self.drag = Some(Drag::Column { column, start });
+                        return Ok(None);
+                    }
+                    // Dragging a queue row: it will drop on whichever row is under the mouse.
+                    (Some(Target::Queue(from)), drag) => {
+                        if let Some(Target::Queue(over)) = target {
+                            *drag = Some(Drag::Row { from, over });
+                        }
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
                 if self.pressed == Some(Target::Volume)
                     && let Some(h) = hits.iter().find(|h| h.target == Target::Volume)
                 {
@@ -1482,6 +1548,17 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                match self.drag.take() {
+                    Some(Drag::Row { from, over }) if from != over => {
+                        self.pressed = None;
+                        return Ok(Some(Action::MoveTo(from, over)));
+                    }
+                    Some(Drag::Column { .. }) => {
+                        self.pressed = None;
+                        return Ok(Some(Action::Settings { rescan: false }));
+                    }
+                    _ => {}
+                }
                 let Some(pressed) = self.pressed.take() else {
                     return Ok(None);
                 };
@@ -1541,6 +1618,18 @@ impl App {
                 None
             }
             Target::Clear => Some(Action::Clear),
+            Target::ColumnsMenu => {
+                self.overlay = Some(Overlay::Columns(0));
+                None
+            }
+            Target::ColumnItem(i) => {
+                if let Some(Overlay::Columns(sel)) = &mut self.overlay {
+                    *sel = i;
+                }
+                self.config.queue.toggle(crate::columns::Column::ALL[i]);
+                Some(Action::Settings { rescan: false })
+            }
+            Target::ColumnEdge(..) => None,
             Target::Queue(i) => {
                 self.queue_sel = i;
                 double.then_some(Action::Jump(i))
@@ -2146,6 +2235,134 @@ pub mod tests {
         // Right after the window gains focus, clicks are ignored.
         app.on_focus();
         assert_eq!(click(&mut app, 12, 1, &hits, &ctx), None);
+    }
+
+    #[test]
+    fn dragging_rows_reorders_and_dragging_edges_resizes() {
+        let tmp = TempDir::new("app-drag");
+        let mut app = app(&tmp);
+        let queue = app.browse.tracks.clone();
+        let ctx = Ctx {
+            queue: &queue,
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+        };
+        let row = |i: u16| Hit {
+            area: Rect::new(0, 10 + i, 80, 1),
+            target: Target::Queue(i as usize),
+        };
+        let mut hits = vec![row(0), row(1), row(2)];
+        hits.push(Hit {
+            area: Rect::new(40, 8, 2, 1),
+            target: Target::ColumnEdge(crate::columns::Column::Title, 10, 45),
+        });
+
+        // Down on the first row, drag to the third, let go: it moves there.
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            5,
+            10,
+            &hits,
+            &ctx,
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            5,
+            11,
+            &hits,
+            &ctx,
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            5,
+            12,
+            &hits,
+            &ctx,
+        );
+        assert_eq!(app.drag, Some(Drag::Row { from: 0, over: 2 }));
+        assert_eq!(
+            mouse(
+                &mut app,
+                MouseEventKind::Up(MouseButton::Left),
+                5,
+                12,
+                &hits,
+                &ctx
+            ),
+            Some(Action::MoveTo(0, 2))
+        );
+        // A click without moving is still a click.
+        assert_eq!(click(&mut app, 5, 11, &hits, &ctx), None);
+        assert_eq!(app.queue_sel, 1);
+
+        // The title column's edge, dragged ten columns right, makes it 40 wide and saves;
+        // it stops at the widest it can go.
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            40,
+            8,
+            &hits,
+            &ctx,
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            50,
+            8,
+            &hits,
+            &ctx,
+        );
+        assert_eq!(app.config.queue.title, 40);
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            90,
+            8,
+            &hits,
+            &ctx,
+        );
+        assert_eq!(app.config.queue.title, 45);
+        assert_eq!(
+            mouse(
+                &mut app,
+                MouseEventKind::Up(MouseButton::Left),
+                50,
+                8,
+                &hits,
+                &ctx
+            ),
+            Some(Action::Settings { rescan: false })
+        );
+
+        // A capital C typed into a search box is just a letter.
+        press(&mut app, KeyCode::Char('b'), &ctx);
+        for c in "Cars".chars() {
+            press(&mut app, KeyCode::Char(c), &ctx);
+        }
+        assert!(app.overlay.is_none());
+        assert_eq!(app.browse.query, "Cars");
+        app.browse_open = false;
+        press(&mut app, KeyCode::Char('/'), &ctx);
+        for c in "Cars".chars() {
+            press(&mut app, KeyCode::Char(c), &ctx);
+        }
+        assert!(matches!(app.overlay, Some(Overlay::Search)));
+        assert_eq!(app.search.query, "Cars");
+        app.overlay = None;
+
+        // C opens the columns menu; Enter hides the highlighted one (Number).
+        press(&mut app, KeyCode::Char('C'), &ctx);
+        assert!(matches!(app.overlay, Some(Overlay::Columns(0))));
+        assert_eq!(
+            press(&mut app, KeyCode::Enter, &ctx),
+            Some(Action::Settings { rescan: false })
+        );
+        assert!(!app.config.queue.shown(crate::columns::Column::Number));
     }
 
     #[test]

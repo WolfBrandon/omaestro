@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OMAESTRO's app icon: the logo's headphones over three EQ bars, in PhosphorWolf greens. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#050a06" stroke="#19482b" stroke-width="8"/>
+  <!-- headband -->
+  <path d="M60 150 V128 a68 68 0 0 1 136 0 V150" fill="none" stroke="#609174" stroke-width="16" stroke-linecap="round"/>
+  <!-- ear cups -->
+  <rect x="44" y="140" width="40" height="64" rx="14" fill="#609174"/>
+  <rect x="172" y="140" width="40" height="64" rx="14" fill="#609174"/>
+  <!-- EQ bars between the cups -->
+  <rect x="98" y="150" width="16" height="54" rx="4" fill="#83c99b"/>
+  <rect x="120" y="118" width="16" height="86" rx="4" fill="#c1e8cb"/>
+  <rect x="142" y="136" width="16" height="68" rx="4" fill="#a1dfb4"/>
+</svg>

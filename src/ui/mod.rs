@@ -13,6 +13,7 @@ mod screens;
 
 use crate::app::{App, Hit, OutputChoice, Overlay, Target, group_thousands};
 use crate::browse::Pane;
+use crate::columns::Column;
 use crate::library::{Source, Track};
 use crate::player::{Player, Status};
 use crate::theme::Theme;
@@ -227,6 +228,7 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
     }
     match &app.overlay {
         Some(Overlay::Help) => draw_help(buf, area, t, &mut hit),
+        Some(Overlay::Columns(sel)) => draw_columns_menu(buf, area, app, *sel, t, &mut hit),
         Some(Overlay::Picker { sel, all }) => {
             draw_picker(buf, area, a.output, app, player, *sel, *all, t, &mut hit)
         }
@@ -380,6 +382,14 @@ fn format_of(t: &Track) -> String {
         Source::Local => short_format(t.bit_depth, t.sample_rate),
         Source::Spotify => "Spotify".into(),
         Source::YouTube => "YouTube".into(),
+    }
+}
+
+/// "Brothers (2010)", or just the album when the year isn't known.
+fn album_year(album: &str, year: Option<i32>) -> String {
+    match year {
+        Some(y) if !album.is_empty() => format!("{album} ({y})"),
+        _ => album.to_string(),
     }
 }
 
@@ -819,8 +829,13 @@ fn draw_queue(
     let mut y = inner.y;
 
     if full {
-        // The playlist's name and its buttons, as in the design.
-        let x = put(buf, inner, cx, y, &format!("{I_LIST}  "), fg(t.fg));
+        // The list icon opens the show/hide-columns menu; then the playlist's name and its
+        // buttons, as in the design.
+        let icon = Rect::new(cx, y, 3, 1);
+        put(buf, inner, cx, y, &format!("{I_LIST} ▾"), fg(t.fg));
+        hit(icon, Target::ColumnsMenu);
+        app.columns_anchor.set(Some(icon));
+        let x = cx + 5;
         let name = player
             .playlist
             .as_ref()
@@ -880,27 +895,37 @@ fn draw_queue(
         return;
     }
 
-    // Columns, as in the design at 120 wide: # 1-2, ▶ 4, source 6, title 9, artist 55,
-    // format 97, time ending at 112 (counted from the inside of the border, plus one).
-    let title_x = cx + 8;
-    let format_x = cr.saturating_sub(15);
-    let columns = format_x > title_x + 20;
-    let artist_x = title_x + format_x.saturating_sub(title_x) * 46 / 88;
-    let title_end = if columns {
-        artist_x - 2
-    } else {
-        cr.saturating_sub(6)
-    };
+    // Columns: shown and sized as set (the list icon's menu, dragging the heading edges).
+    let (marker, placed) = crate::columns::layout(cx, cr, &app.config.queue);
+    let flexible: Vec<&crate::columns::Placed> =
+        placed.iter().filter(|p| p.column.flexible()).collect();
 
     if full {
         let head = bold(t.dim);
-        put_right(buf, inner, cx + 1, y, "#", head);
-        put(buf, inner, title_x, y, "TITLE", head);
-        if columns {
-            put(buf, inner, artist_x, y, "ARTIST", head);
-            put(buf, inner, format_x, y, "FORMAT", head);
+        for p in &placed {
+            match p.column {
+                Column::Number => put_right(buf, inner, p.x + p.width - 1, y, "#", head),
+                Column::Time => put_right(buf, inner, p.x + p.width - 1, y, "TIME", head),
+                c => {
+                    put(buf, inner, p.x, y, c.heading(), head);
+                }
+            }
         }
-        put_right(buf, inner, cr, y, "TIME", head);
+        // A handle between text columns: drag it to resize the one on its left. It can grow
+        // as far as the last text column can shrink.
+        let give = flexible.last().map_or(0, |last| {
+            last.width.saturating_sub(crate::columns::MIN_WIDTH)
+        });
+        for p in flexible.iter().take(flexible.len().saturating_sub(1)) {
+            let edge = p.x + p.width;
+            let dragging = matches!(app.drag, Some(crate::app::Drag::Column { column, .. }) if column == p.column);
+            let color = if dragging { t.accent } else { t.selection };
+            put(buf, inner, edge, y, "╎", fg(color));
+            hit(
+                Rect::new(edge, y, 2, 1),
+                Target::ColumnEdge(p.column, p.x, p.width + give),
+            );
+        }
         y += 1;
     }
 
@@ -913,6 +938,10 @@ fn draw_queue(
     };
     let top = scroll(app.queue_top.get(), anchor, rows, queue.len());
     app.queue_top.set(top);
+    let dragging = match app.drag {
+        Some(crate::app::Drag::Row { from, over }) if from != over => Some((from, over)),
+        _ => None,
+    };
 
     for (i, track) in queue.iter().enumerate().skip(top).take(rows) {
         let ry = y + (i - top) as u16;
@@ -925,49 +954,88 @@ fn draw_queue(
             fill(buf, row, Style::new().bg(t.selection));
         }
         let faded = |color: Color| {
-            if played {
+            if played || dragging.is_some_and(|(from, _)| from == i) {
                 fg(t.dim).add_modifier(Modifier::DIM)
             } else {
                 fg(color)
             }
         };
-        put_right(buf, inner, cx + 1, ry, &(i + 1).to_string(), faded(t.dim));
         if playing {
-            put(buf, inner, cx + 3, ry, "▶", bold(t.accent));
+            put(buf, inner, marker, ry, "▶", bold(t.accent));
         }
-        let (icon, icon_color) = source_icon(track.source, t);
-        put(buf, inner, cx + 5, ry, icon, faded(icon_color));
-        let title_style = if playing {
-            bold(t.bright)
-        } else if selected {
-            fg(t.bright)
-        } else {
-            faded(t.light)
-        };
-        let title_w = title_end.saturating_sub(title_x);
-        put(
-            buf,
-            inner,
-            title_x,
-            ry,
-            &fit(&track.title, title_w),
-            title_style,
-        );
-        if columns {
-            let artist_w = format_x.saturating_sub(artist_x + 2);
+        for p in &placed {
+            match p.column {
+                Column::Number => put_right(
+                    buf,
+                    inner,
+                    p.x + p.width - 1,
+                    ry,
+                    &(i + 1).to_string(),
+                    faded(t.dim),
+                ),
+                Column::Source => {
+                    let (icon, icon_color) = source_icon(track.source, t);
+                    put(buf, inner, p.x, ry, icon, faded(icon_color));
+                }
+                Column::Title => {
+                    let style = if playing {
+                        bold(t.bright)
+                    } else if selected {
+                        fg(t.bright)
+                    } else {
+                        faded(t.light)
+                    };
+                    put(buf, inner, p.x, ry, &fit(&track.title, p.width), style);
+                }
+                Column::Artist => {
+                    put(
+                        buf,
+                        inner,
+                        p.x,
+                        ry,
+                        &fit(&track.artist, p.width),
+                        faded(t.fg),
+                    );
+                }
+                Column::Album => {
+                    let album = album_year(&track.album, track.year);
+                    put(buf, inner, p.x, ry, &fit(&album, p.width), faded(t.dim));
+                }
+                Column::Format => {
+                    let color = if hi_res(track) { t.light } else { t.fg };
+                    put(
+                        buf,
+                        inner,
+                        p.x,
+                        ry,
+                        &fit(&format_of(track), p.width),
+                        faded(color),
+                    );
+                }
+                Column::Time => {
+                    let time = clock(track.duration_ms as f64 / 1000.0);
+                    put_right(buf, inner, p.x + p.width - 1, ry, &time, faded(t.dim));
+                }
+            }
+        }
+        // Where a dragged row will land: a line on the row it will push down (or up).
+        if let Some((from, over)) = dragging
+            && over == i
+        {
+            let mark = if over > from { "▁" } else { "▔" };
+            for x in inner.x..inner.right() {
+                put(buf, inner, x, ry, mark, fg(t.accent));
+            }
+            let title = fit(&queue[from].title, inner.width.saturating_sub(8));
             put(
                 buf,
                 inner,
-                artist_x,
+                cx + 2,
                 ry,
-                &fit(&track.artist, artist_w),
-                faded(t.fg),
+                &format!(" {title} "),
+                bold(t.bright).bg(t.selection),
             );
-            let color = if hi_res(track) { t.light } else { t.fg };
-            put(buf, inner, format_x, ry, &format_of(track), faded(color));
         }
-        let time = clock(track.duration_ms as f64 / 1000.0);
-        put_right(buf, inner, cr, ry, &time, faded(t.dim));
     }
 }
 
@@ -1195,6 +1263,53 @@ fn draw_picker(
     hints(buf, inner, cx, inner.bottom().saturating_sub(1), &pairs, t);
 }
 
+/// The queue's show/hide-columns menu, hanging from the list icon.
+fn draw_columns_menu(
+    buf: &mut Buffer,
+    screen: Rect,
+    app: &App,
+    selected: usize,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    let w = 34.min(screen.width);
+    let h = (Column::ALL.len() as u16 + 4).min(screen.height);
+    let r = match app.columns_anchor.get() {
+        Some(icon) => Rect::new(icon.x.saturating_sub(1), icon.bottom(), w, h).intersection(screen),
+        None => centred(screen, w, h),
+    };
+    let inner = popup(buf, r, "COLUMNS", t, hit);
+    for (i, column) in Column::ALL.iter().enumerate() {
+        let y = inner.y + i as u16;
+        let row = Rect::new(inner.x, y, inner.width, 1).intersection(inner);
+        hit(row, Target::ColumnItem(i));
+        if i == selected {
+            fill(buf, row, Style::new().bg(t.selection));
+        }
+        let on = app.config.queue.shown(*column);
+        let (mark, color) = if on {
+            ("■", t.accent)
+        } else {
+            ("□", t.dim)
+        };
+        put(buf, inner, inner.x + 1, y, mark, fg(color));
+        let style = if on { fg(t.bright) } else { fg(t.fg) };
+        let x = put(buf, inner, inner.x + 3, y, column.label(), style);
+        if *column == Column::Title {
+            put(buf, inner, x + 2, y, "always", fg(t.dim));
+        }
+    }
+    let pairs = [("⏎", "show/hide"), ("Esc", "close")];
+    hints(
+        buf,
+        inner,
+        inner.x + 1,
+        inner.bottom().saturating_sub(1),
+        &pairs,
+        t,
+    );
+}
+
 fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rect, Target)) {
     let keys = [
         ("b", "Browse the library"),
@@ -1217,6 +1332,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("^Z  c", "Undo the last change (anywhere), clear the queue"),
         ("s  S", "Save, or save as a new playlist"),
         ("O", "Open a playlist (saved, Spotify, YouTube Music)"),
+        ("C", "Show or hide columns (or click the list icon)"),
         ("", ""),
         ("Browser", ""),
         ("Tab", "Next pane: search, results, songs"),
@@ -1225,6 +1341,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("Esc  b", "Close"),
         ("", ""),
         ("Mouse", "Click buttons and rows, double-click plays"),
+        ("", "Drag queue rows to reorder, column edges to resize"),
     ];
     let r = centred(screen, 64, keys.len() as u16 + 4);
     let inner = popup(buf, r, "HELP", t, hit);
@@ -1376,6 +1493,7 @@ mod tests {
                     "2 tracks · 6:00",
                     "Save as…",
                     "● unsaved",
+                    "ALBUM",
                     "Designed with OTIS",
                 ] {
                     assert!(text.contains(expected), "missing {expected:?}\n{text}");
@@ -1439,6 +1557,15 @@ mod tests {
             let (text, _) = frame(&app, 0.0);
             if (w, h) == (120, 60) {
                 assert!(text.contains("Connect Spotify in Settings"), "{text}");
+            }
+            key(&mut app, KeyCode::Esc);
+            key(&mut app, KeyCode::Char('C'));
+            let (text, _) = frame(&app, 0.0);
+            if (w, h) == (120, 60) {
+                assert!(
+                    text.contains("COLUMNS") && text.contains("Album (year)"),
+                    "{text}"
+                );
             }
             key(&mut app, KeyCode::Esc);
 
@@ -1546,7 +1673,7 @@ mod tests {
         let config = crate::config::Config::load().unwrap();
         let mut app = App::new(db, config, tx).unwrap();
         let tmp = TempDir::new("preview");
-        let player = silent_player(&tmp);
+        let mut player = silent_player(&tmp);
         let ctx = Ctx {
             queue: &[],
             devices: &[],
@@ -1579,6 +1706,15 @@ mod tests {
                 ))
             }
             "open" => keys(&mut app, "O"),
+            "queue" => {
+                keys(&mut app, "bblack keys");
+                app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
+                player
+                    .enqueue(app.browse.tracks.iter().take(14).cloned().collect())
+                    .unwrap();
+                keys(&mut app, "b");
+                app.on_key(KeyEvent::from(KeyCode::Esc), &ctx).unwrap();
+            }
             _ => {
                 keys(&mut app, "bblack keys");
                 app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
