@@ -3,13 +3,32 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.4.0 — 2026-10-13
+
+- **Search, redesigned** to the new OTIS tab.
+  - The search box is at the top, with the providers under it.
+  - Each provider's results get their own box, with their count and column headings; the
+    box you're in has a brighter border.
+  - A provider that's off gets a line saying how to switch it on.
+  - A × closes Search.
+- **Buttons, centred for real.**
+  - The trouble: in foot's font (GeistMono Nerd Font), the old Font Awesome icons are wider
+    than a cell, and a terminal can only move things by whole cells.
+  - The fix: playback buttons and Help now use Material Design icons, which are narrower
+    than a cell and centred in it, in buttons 5 cells wide.
+  - Settings uses Material's cog. No gear in the font is narrow enough to sit exactly in the
+    middle; this one is the closest.
+- Quality for Spotify on Sonos still shows nothing: for a song handed over the way OMAESTRO
+  does it, the speaker doesn't report the quality.
+
 ## 0.3.0 — 2026-10-13
 
 - **Fix: Spotify on Sonos.**
   - The problem: newer Sonos software (18.x) no longer lists the accounts linked in the
     Sonos app, so OMAESTRO wrongly said Spotify wasn't linked.
   - The fix: it now reads the account from Spotify songs the Sonos app already put on the
-    speakers (a queue, a Sonos playlist or a favourite), and remembers it.
+    speakers (a room's queue, or a Spotify album or playlist in Sonos favourites), and
+    remembers it.
   - Spotify links are now made exactly the way the Sonos app makes them.
 - **Stream quality in Now Playing.** Spotify and YouTube songs show how they're coming in,
   e.g. "OPUS 141 kbps", "AAC 256 kbps" or "LOSSLESS 16b-44k", instead of "SPOTIFY" or

@@ -18,6 +18,8 @@ pub struct Theme {
     pub selection: Color,
     /// Browse panels and popups (`lighter_background`).
     pub panel: Color,
+    /// Bars set into a popup, such as column headings (`darker_background`).
+    pub darker: Color,
     /// Labels, column headings, times, played rows (`dark_foreground`).
     pub dim: Color,
     /// Secondary text such as artist names (`foreground`).
@@ -38,6 +40,7 @@ impl Default for Theme {
             accent: rgb(0x64ce8d),
             selection: rgb(0x19482b),
             panel: rgb(0x0c1c10),
+            darker: rgb(0x020403),
             dim: rgb(0x609174),
             fg: rgb(0x83c99b),
             light: rgb(0xa1dfb4),
@@ -77,6 +80,9 @@ impl Theme {
             accent: get("accent").unwrap_or(d.accent),
             selection: get("selection").unwrap_or(d.selection),
             panel: get("lighter_background").unwrap_or(d.panel),
+            darker: get("darker_background")
+                .or_else(|| get("background"))
+                .unwrap_or(d.darker),
             dim: get("dark_foreground").unwrap_or(d.dim),
             fg: get("foreground").unwrap_or(d.fg),
             light: get("light_foreground").unwrap_or(d.light),

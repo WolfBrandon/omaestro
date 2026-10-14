@@ -565,7 +565,8 @@ impl Sonos {
     /// The Spotify account linked in the Sonos app, which a Spotify link for Sonos has to name.
     /// Older Sonos software lists linked accounts (`/status/accounts`); newer software (18.x)
     /// leaves that list empty, so OMAESTRO reads the account from Spotify songs the Sonos app
-    /// already put on the speakers: each group's queue, then Sonos playlists and favourites.
+    /// already put on the speakers: each group's queue, then Spotify albums or playlists in
+    /// Sonos favourites.
     /// What it finds is remembered, so a cleared queue later doesn't matter.
     pub fn spotify_account(&self) -> Option<SpotifyAccount> {
         let saved = std::fs::read_to_string(account_file()).ok();
@@ -612,11 +613,7 @@ impl Sonos {
         coordinators
             .iter()
             .find_map(|c| browse(&c.uuid, "Q:0").and_then(|xml| spotify_account_in_links(&xml)))
-            .or_else(|| {
-                ["SQ:", "FV:2"].iter().find_map(|id| {
-                    browse(&first.uuid, id).and_then(|x| spotify_account_in_links(&x))
-                })
-            })
+            .or_else(|| browse(&first.uuid, "FV:2").and_then(|x| spotify_account_in_links(&x)))
     }
 }
 

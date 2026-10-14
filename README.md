@@ -84,7 +84,7 @@ button. In foot, Ctrl+Shift+O also picks out links on screen.
    Sonos plays Spotify songs from Spotify itself, and the link has to name your Spotify
    account the way Sonos numbers it. Newer Sonos software (18.x) won't list accounts, so
    OMAESTRO finds the number on Spotify songs the Sonos app has already put on a speaker
-   (a queue, a Sonos playlist or a favourite) and remembers it in
+   (a room's queue, or a Spotify album or playlist in Sonos favourites) and remembers it in
    `~/.cache/omaestro/sonos-spotify-account`. If it can't find one, play any Spotify song
    once from the Sonos app, in any room.
 
@@ -124,8 +124,10 @@ hide a group. `Tab` moves between the search box, results and songs. `Enter` (or
 double-click) adds the song or album to the end of the queue without playing it; on an artist
 it shows their songs. The browser never replaces the queue, so an open playlist is safe.
 
-In Search, `Enter` plays a song right away (the queue carries on after it), `a` adds it,
-`A` adds everything that source found.
+In Search, type in the box at the top; `1` `2` `3` (or clicking them) switch Local, Spotify
+and YouTube Music on and off. Each provider's results get their own box; `Tab` jumps to the
+next one. `Enter` plays a song right away (the queue carries on after it), `a` adds it, `A`
+adds everything that provider found. `Esc` or the × closes Search.
 
 Colours come from the current Omarchy theme and follow theme switches while the player is open.
 

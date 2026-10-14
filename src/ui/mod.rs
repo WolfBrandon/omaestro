@@ -26,13 +26,18 @@ use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use std::time::SystemTime;
 
 // Nerd Font icons, as in the design.
-const I_STOP: &str = "\u{f04d}";
-const I_PREV: &str = "\u{f048}";
-const I_PLAY: &str = "\u{f04b}";
-const I_PAUSE: &str = "\u{f04c}";
-const I_NEXT: &str = "\u{f051}";
-const I_GEAR: &str = "\u{f013}";
-const I_HELP: &str = "\u{f059}";
+// Button icons, measured in GeistMono Nerd Font (foot's font here). A terminal can only move
+// things by whole cells, so an icon sits in the middle of a button only if it's centred in its
+// own cell. These Material Design ones are under a cell wide and centred in it. Font Awesome's
+// spill about half a cell into the next one, which pushed them off centre. No gear in the font
+// is that narrow; Material's cog is the closest (0.18 of a cell right of centre).
+const I_STOP: &str = "\u{f04db}";
+const I_PREV: &str = "\u{f04ae}";
+const I_PLAY: &str = "\u{f040a}";
+const I_PAUSE: &str = "\u{f03e4}";
+const I_NEXT: &str = "\u{f04ad}";
+const I_GEAR: &str = "\u{f0493}";
+const I_HELP: &str = "\u{f02d6}";
 const I_HEADPHONES: &str = "\u{f025}";
 const I_VOLUME_OFF: &str = "\u{f026}";
 const I_VOLUME_LOW: &str = "\u{f027}";
@@ -77,9 +82,9 @@ const VOLUME_W: u16 = 27;
 /// The volume slider's length inside its box.
 const VOLUME_SLIDER: u16 = 16;
 const OUTPUT_W: u16 = 22;
-/// A button with just an icon. Icons draw about two cells wide in Nerd Fonts, so the inside
-/// is an even four cells and the icon sits in the middle two.
-const ICON_BUTTON_W: u16 = 6;
+/// A button with just an icon: three cells inside, the icon in the middle one. About as wide
+/// as it is tall on screen.
+const ICON_BUTTON_W: u16 = 5;
 
 /// Where everything goes on a screen this size.
 struct Areas {
@@ -211,11 +216,11 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
         hit(r, Target::Output);
     }
     if let Some(r) = a.settings {
-        button(buf, r, &format!("{I_GEAR} "), t.selection, t.light);
+        button(buf, r, I_GEAR, t.selection, t.light);
         hit(r, Target::Settings);
     }
     if let Some(r) = a.help {
-        button(buf, r, &format!("{I_HELP} "), t.selection, t.light);
+        button(buf, r, I_HELP, t.selection, t.light);
         hit(r, Target::Help);
     }
     if let Some(r) = a.now {
@@ -609,7 +614,7 @@ fn draw_now_playing(
             ];
             for (i, (icon, target)) in buttons.into_iter().enumerate() {
                 let area = Rect::new(x + i as u16 * step, y, ICON_BUTTON_W, 3);
-                button(buf, area, &format!("{icon} "), t.selection, t.light);
+                button(buf, area, icon, t.selection, t.light);
                 hit(area, target);
             }
         }
@@ -1621,10 +1626,19 @@ mod tests {
             }
             let (text, hits) = frame(&app, 0.0);
             if (w, h) == (120, 60) {
-                assert!(
-                    text.contains("SEARCH") && text.contains("Dancing Queen"),
-                    "{text}"
-                );
+                for expected in [
+                    "SEARCH",
+                    "Dancing Queen",
+                    "LOCAL (",
+                    "1 2 3 toggle providers",
+                    "Spotify is off · press 2 to include it",
+                    "×",
+                ] {
+                    assert!(text.contains(expected), "missing {expected:?}\n{text}");
+                }
+                for target in [Target::SearchBox, Target::CloseSearch] {
+                    assert!(hits.iter().any(|h| h.target == target), "no {target:?}");
+                }
                 assert!(
                     hits.iter()
                         .any(|h| matches!(h.target, Target::SearchRow(_)))

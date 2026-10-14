@@ -260,6 +260,8 @@ pub enum Target {
     OpenTab(Source),
     /// The Search screen's box, source chips and result rows.
     SearchBox,
+    /// The × at the top right of Search.
+    CloseSearch,
     SearchChip(Source),
     SearchRow(usize),
     /// Settings: a section in the list on the left, a row, one of a row's choices, a button.
@@ -293,6 +295,7 @@ impl Target {
                 | Target::Playlist(_)
                 | Target::OpenTab(_)
                 | Target::SearchBox
+                | Target::CloseSearch
                 | Target::SearchChip(_)
                 | Target::SearchRow(_)
                 | Target::SettingsSection(_)
@@ -1681,6 +1684,10 @@ impl App {
                 self.search.typing = true;
                 None
             }
+            Target::CloseSearch => {
+                self.overlay = None;
+                None
+            }
             Target::SearchChip(source) => {
                 if self.search.toggle(source) == search::Outcome::Changed {
                     self.run_search()?;
@@ -2363,6 +2370,26 @@ pub mod tests {
             Some(Action::Settings { rescan: false })
         );
         assert!(!app.config.queue.shown(crate::columns::Column::Number));
+    }
+
+    #[test]
+    fn the_cross_closes_search() {
+        let tmp = TempDir::new("app-close-search");
+        let mut app = app(&tmp);
+        let ctx = Ctx {
+            queue: &[],
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+        };
+        press(&mut app, KeyCode::Char('/'), &ctx);
+        assert!(matches!(app.overlay, Some(Overlay::Search)));
+        let hits = [Hit {
+            area: Rect::new(100, 10, 3, 1),
+            target: Target::CloseSearch,
+        }];
+        click(&mut app, 101, 10, &hits, &ctx);
+        assert!(app.overlay.is_none());
     }
 
     #[test]
