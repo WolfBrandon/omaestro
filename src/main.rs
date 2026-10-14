@@ -23,10 +23,11 @@ mod status;
 mod testutil;
 mod theme;
 mod ui;
+mod update;
 mod visualizer;
 mod youtube;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use app::{Action, App, Ctx, News};
 use config::Config;
 use library::scan::{self, Progress, Summary};
@@ -62,6 +63,8 @@ fn main() -> Result<()> {
         Some("scan") => cmd_scan(),
         Some("search") => cmd_search(&args[1..].join(" ")),
         Some("stats") => cmd_stats(),
+        // Started by an update in place: carry on playing from where the last version was.
+        Some("--resume") => run_player(true),
         Some("--version" | "-V") => {
             println!("omaestro {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -70,7 +73,7 @@ fn main() -> Result<()> {
             print!("{USAGE}");
             Ok(())
         }
-        None => run_player(),
+        None => run_player(false),
     }
 }
 
@@ -94,7 +97,17 @@ fn start_scan(config: &Config, tx: Sender<ScanMsg>) {
     });
 }
 
-fn run_player() -> Result<()> {
+/// How the main loop ended.
+enum Exit {
+    Quit,
+    /// Switch to the new version, playing on from the same place if `resume`.
+    Restart {
+        resume: bool,
+    },
+}
+
+fn run_player(resume: bool) -> Result<()> {
+    let mut watch = update::Watch::new();
     let config = Config::load()?;
     let (mpv_tx, mpv_rx) = mpsc::channel();
     let options = Options {
@@ -176,6 +189,8 @@ fn run_player() -> Result<()> {
         &scan_tx,
         &news_rx,
         &mut desktop,
+        &mut watch,
+        resume,
     );
     let _ = execute!(
         std::io::stdout(),
@@ -190,7 +205,20 @@ fn run_player() -> Result<()> {
     let _ = session::save(&config::data_dir(), &player.session());
     let _ = app.config.save();
     player.shut_down();
-    result
+    match result? {
+        Exit::Quit => Ok(()),
+        Exit::Restart { resume } => {
+            // Starting the new version replaces this process without running any clean-up:
+            // stop mpv and Soloist first, so the new one can start them.
+            drop(player);
+            drop(desktop);
+            let path = watch
+                .path()
+                .context("can't tell where OMAESTRO was started from")?;
+            let error = update::restart(path, resume);
+            Err(anyhow::anyhow!("couldn't start the new version: {error}"))
+        }
+    }
 }
 
 /// What the desktop side (MPRIS, the tray, the window) needs between loop turns, including
@@ -328,7 +356,10 @@ fn event_loop(
     scan_tx: &Sender<ScanMsg>,
     news_rx: &Receiver<News>,
     desktop: &mut Desktop,
-) -> Result<()> {
+    watch: &mut update::Watch,
+    mut resume: bool,
+) -> Result<Exit> {
+    let mut update_offered = false;
     let mut dirty = true;
     // The queue is kept for next time whenever it or the song it's on changes.
     let mut kept = (
@@ -361,6 +392,31 @@ fn event_loop(
         if now != kept {
             kept = now;
             let _ = session::save(&config::data_dir(), &player.session());
+        }
+        // After an update: play on from the same place, once the output can (Sonos needs its
+        // speakers found first).
+        if resume && player.can_play() {
+            resume = false;
+            if let Some(i) = player.current_index() {
+                player.jump(i)?;
+            }
+        }
+        // A new version installed: switch now if nothing's playing, else offer U and switch
+        // at the next pause.
+        watch.poll();
+        if let Some(version) = &watch.ready {
+            let playing = !player.status.idle && !player.status.paused;
+            match update::when(playing) {
+                update::Switch::Now => return Ok(Exit::Restart { resume: false }),
+                update::Switch::Wait if !update_offered => {
+                    update_offered = true;
+                    app.status = format!(
+                        "v{version} is ready: U switches now, or it switches at the next pause"
+                    );
+                    dirty = true;
+                }
+                update::Switch::Wait => {}
+            }
         }
         // How the sources are doing, checked in the background every couple of minutes.
         if app.sources_due() {
@@ -482,7 +538,14 @@ fn event_loop(
             };
             if let Some(action) = action {
                 match action {
-                    Action::Quit => return Ok(()),
+                    Action::Quit => return Ok(Exit::Quit),
+                    Action::Update if watch.ready.is_some() => {
+                        let playing = !player.status.idle && !player.status.paused;
+                        return Ok(Exit::Restart { resume: playing });
+                    }
+                    Action::Update => {
+                        app.status = "There's no new version to switch to".into();
+                    }
                     Action::Minimize => match &desktop.window {
                         Some(w) => {
                             w.hide();
@@ -513,8 +576,9 @@ fn event_loop(
             dirty = true;
         }
         player.tick()?;
+        // Quit from the tray or a media widget.
         if desktop.obey(player)? {
-            return Ok(());
+            return Ok(Exit::Quit);
         }
         desktop.report(player, app);
         // When the next song starts by itself, the highlight moves with it if it was on the
@@ -719,7 +783,7 @@ fn apply(
             app.scanning = true;
             start_scan(&app.config, scan_tx.clone());
         }
-        Action::Quit | Action::Minimize => {}
+        Action::Quit | Action::Minimize | Action::Update => {}
     }
     Ok(())
 }

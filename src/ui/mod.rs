@@ -1433,6 +1433,10 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
             "i",
             "File Info for the highlighted song (or right-click it)",
         ),
+        (
+            "U",
+            "Switch to a newly installed version now (it also does at the next pause)",
+        ),
         ("r", "Check the music folders for changes"),
         ("q", "Quit (the music stops)"),
         ("", ""),

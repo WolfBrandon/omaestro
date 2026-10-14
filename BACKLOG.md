@@ -8,7 +8,7 @@ In the order they'll be built:
 
 - [x] **Connection status**: a dot and a word for each source (0.9.2).
 - [x] **File Info**: everything about a song, in a pop-up (0.9.3).
-- [ ] **Update in place**: switch to a new version without closing and reopening.
+- [x] **Update in place**: switch to a new version without closing and reopening (0.9.4).
 - [ ] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
   ListenBrainz.
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
@@ -61,13 +61,3 @@ and puts it back when playback stops or OMAESTRO quits.
 - **Other sound** on that device follows the same rate meanwhile.
 
 Today PipeWire runs everything at 48 kHz, so 44.1 and 96 kHz files are resampled.
-
-## Update in place
-
-When `./install.sh` puts a new version in place, a running OMAESTRO notices:
-- **If nothing's playing** (or it's paused), it restarts itself into the new version straight
-  away.
-- **While playing,** the status line says "v0.9.x is ready: U switches", and it switches at
-  the next pause.
-- **Either way** it keeps the queue, the song and position, the output and the volume.
-

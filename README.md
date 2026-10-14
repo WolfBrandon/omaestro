@@ -69,8 +69,13 @@ cd omaestro
 - the icon, in `~/.local/share/icons/hicolor/`;
 - a launcher entry, `~/.local/share/applications/org.omarchy.omaestro.desktop`.
 
-Run it again to update. `./install.sh --uninstall` removes all three, and your settings and
-playlists stay.
+Run it again to update. A running OMAESTRO notices the new version:
+- **Nothing playing, or paused:** it switches straight away, in the same window.
+- **Playing:** it offers `U` to switch now, without stopping the music for more than a moment.
+  Otherwise it switches at the next pause.
+
+The queue, the song and your place in it come along. `./install.sh --uninstall` removes all
+three files, and your settings and playlists stay.
 
 The launcher runs `omaestro launch`:
 - If OMAESTRO is already running (even minimized), it brings that window back.
@@ -136,6 +141,7 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
 | `Ctrl+Z` | Undo the last change to the queue, from anywhere |
 | `m` | Minimize into the `special:omaestro` scratchpad; the tray icon or a media widget brings it back |
 | `F2` | Settings, one section at a time (`Tab` or click a pill); `/` finds a setting by name |
+| `U` | Switch to a newly installed version now (otherwise it switches at the next pause) |
 | `i` | File Info for the highlighted song (or right-click it): tags, format, bitrate, size, ReplayGain, path or link. `c` copies the path or link, `o` opens its folder or page |
 | `r` | Check the music folders for changes |
 | `q` | Quit (the music stops) |

@@ -90,6 +90,8 @@ pub enum Action {
     Minimize,
     Rescan,
     Quit,
+    /// Switch to the new version that's been installed (U).
+    Update,
 }
 
 /// Results of background work.
@@ -1578,6 +1580,7 @@ impl App {
         let here = (self.queue_sel < ctx.queue.len()).then_some(self.queue_sel);
         match key.code {
             KeyCode::Enter => here.map(Action::Jump),
+            KeyCode::Char('U') => Some(Action::Update),
             KeyCode::Char('i') => {
                 if let Some(track) = here.and_then(|i| ctx.queue.get(i)).cloned() {
                     self.open_file_info(track);

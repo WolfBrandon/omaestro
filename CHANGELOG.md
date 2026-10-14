@@ -3,6 +3,16 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.4 — 2026-10-14
+
+- **Update in place.** When `./install.sh` puts a new version where OMAESTRO was started from,
+  a running OMAESTRO notices within a few seconds.
+  - **Nothing playing, or paused:** it switches straight away, in the same window.
+  - **Playing:** the status line offers `U` to switch now and carry on playing from the same
+    place. Otherwise it switches at the next pause.
+  - The queue, the song and the place in it come along. A new file only counts once it
+    answers `--version`, so a half-built one is never started.
+
 ## 0.9.3 — 2026-10-14
 
 - **File Info:** `i`, or a right-click on a song, in the queue, the browser or Search.

@@ -1,6 +1,6 @@
 [package]
 name = "omaestro"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 description = "A terminal music player for Omarchy: local library, Spotify, YouTube Music and Sonos in one queue"
 license = "MIT"

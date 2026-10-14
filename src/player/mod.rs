@@ -757,6 +757,11 @@ impl Player {
         }
     }
 
+    /// Whether the chosen output can play now: Sonos needs its speakers found first.
+    pub fn can_play(&self) -> bool {
+        matches!(self.output, Output::Here(_)) || self.household.is_some()
+    }
+
     /// The volume on this computer's outputs (kept for next time), wherever it's playing now.
     pub fn here_volume(&self) -> f64 {
         self.here_volume
