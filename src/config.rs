@@ -201,8 +201,7 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let dir = config_dir();
-        std::fs::create_dir_all(&dir)?;
+        let dir = private_dir(&config_dir())?;
         let text = format!("{HEADER}{}", toml::to_string_pretty(self)?);
         std::fs::write(dir.join("config.toml"), text)?;
         Ok(())
@@ -230,6 +229,21 @@ fn xdg_dir(name: &str, fallback: &str) -> PathBuf {
 
 pub fn config_dir() -> PathBuf {
     xdg_dir("XDG_CONFIG_HOME", ".config")
+}
+
+/// Makes `dir` if needed, and makes it readable only by you (sign-ins and sockets live in
+/// these). Its parent folders are made as usual.
+pub fn private_dir(dir: &std::path::Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(dir.to_path_buf())
 }
 
 /// Things worth keeping: playlists.

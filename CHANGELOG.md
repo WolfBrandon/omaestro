@@ -3,6 +3,50 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.7 — 2026-10-14
+
+Fixes from three independent code reviews (Grok, Antigravity, Codex).
+
+- **YouTube cookies:** connecting YouTube Music kept your browser's whole cookie export, every
+  site's, where only YouTube's are used.
+  - Now the export goes into a private folder, only YouTube's are kept, and the rest are
+    deleted straight away.
+  - An existing file is cut down the next time OMAESTRO starts.
+- **Playlists are never written over by another:**
+  - Renaming one to a name that's taken, or naming an unsaved queue that way, now says so
+    instead.
+  - Names that share a file name count as taken: "Road/Trip" and "Road:Trip" are both
+    `Road-Trip.jspf`.
+  - A Spotify or YouTube Music playlist with the same name as one of yours opens as
+    "Name (Spotify)".
+- **An interrupted library scan** (quitting during "Finishing", say) left search and the album
+  list out of date until some file changed. The next scan now finishes the job.
+- **Unreadable files are retried.** A file whose tags couldn't be read (the NAS blinked) is
+  tried again at the next scan, instead of staying listed by its file name.
+- **A song that can't start on Sonos** now leaves the player stopped on that song, with the
+  reason. Space tries it again; before, Space did nothing.
+- **The file server for Sonos:**
+  - It offers only the song playing now, and nothing once Sonos stops.
+  - It answers only your speakers.
+  - It serves only files inside your music folders (a playlist file can't point it anywhere
+    else, nor can a file swapped for a link).
+  - It takes a few connections at a time, with short requests.
+  - Song addresses are no longer written to `sonos.log`, which is now readable only by you and
+    starts over past 1 MB.
+  - SECURITY.md said the server runs only while playing on Sonos; it now says what it does.
+- **Smaller fixes:**
+  - Sonos is only ever told to play OMAESTRO's own song links or Spotify links.
+  - Spotify and YouTube song ids are checked before they're used in a link, a file name or a
+    command.
+  - Spotify's "next page" links are only followed to Spotify itself, since your sign-in goes
+    with them.
+  - A stray request to the Spotify sign-in page no longer cancels a sign-in in progress.
+  - Random addresses and sign-in codes fail safely if the system's random source can't be
+    read, instead of coming out the same every time.
+  - `~/.config/omaestro`, and the player's control folder, are readable only by you.
+  - A music folder whose check hangs (a NAS gone away) isn't checked again until that check
+    returns, so stuck checks don't pile up.
+
 ## 0.9.6 — 2026-10-14
 
 - **Updating is your choice:** Settings → About → Auto-update, on or off.

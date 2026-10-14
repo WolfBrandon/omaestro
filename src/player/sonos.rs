@@ -36,10 +36,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// Getting a song ready (converting, downloading) before it plays.
-    Preparing {
-        ticket: u64,
-        what: String,
-    },
+    Preparing { ticket: u64, what: String },
     /// Where the group is: "PLAYING", "PAUSED_PLAYBACK", "STOPPED", "TRANSITIONING".
     Status {
         ticket: u64,
@@ -48,19 +45,17 @@ pub enum Event {
         duration: f64,
     },
     /// The song played to its end.
-    Ended {
-        ticket: u64,
-    },
+    Ended { ticket: u64 },
     /// The group's volume, 0 to 100.
     Volume(u8),
-    Error {
-        ticket: u64,
-        message: String,
-    },
+    /// The song couldn't start (it couldn't be got ready, or the speaker never began): nothing
+    /// is playing now, so Space can try it again.
+    Failed { ticket: u64, message: String },
+    /// Something went wrong while a song plays (a pause, a seek, asking where it is); the song
+    /// carries on as far as OMAESTRO knows.
+    Error { ticket: u64, message: String },
     /// Someone else started something on the group (the Sonos app, say); OMAESTRO lets go.
-    TakenOver {
-        ticket: u64,
-    },
+    TakenOver { ticket: u64 },
 }
 
 /// The line to the Sonos thread.
@@ -74,7 +69,14 @@ impl SonosPlayer {
         port: u16,
         events: impl Fn(Event) + Send + 'static,
     ) -> Result<SonosPlayer> {
-        let server = server::Server::start(port)?;
+        // Only the household's speakers fetch songs.
+        let speakers = sonos
+            .household
+            .ips
+            .values()
+            .filter_map(|ip| ip.parse().ok())
+            .collect();
+        let server = server::Server::start(port, speakers)?;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || run(&sonos, &server, rx, events));
         Ok(SonosPlayer { commands: tx })
@@ -113,6 +115,10 @@ fn run(
     let mut playing: Option<Playing> = None;
     let mut last_poll = Instant::now();
     loop {
+        // Stopped, ended, failed or taken over: the song isn't offered any more.
+        if playing.is_none() {
+            server.withdraw();
+        }
         let wait = if playing.is_some() {
             Duration::from_millis(1000).saturating_sub(last_poll.elapsed())
         } else {
@@ -149,7 +155,7 @@ fn run(
                                         asked: Instant::now(),
                                     });
                                 }
-                                Err(e) => events(Event::Error {
+                                Err(e) => events(Event::Failed {
                                     ticket,
                                     message: format!("{e:#}"),
                                 }),
@@ -196,12 +202,14 @@ fn run(
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
+                server.withdraw();
                 if let Some(p) = playing {
                     let _ = sonos.stop(&p.group);
                 }
                 return;
             }
         }
+
         if last_poll.elapsed() >= Duration::from_millis(900)
             && let Some(p) = playing.as_mut()
         {
@@ -217,7 +225,7 @@ fn run(
                         p.started = true;
                     }
                     if !p.started && !p.held && p.asked.elapsed() > START_TIMEOUT {
-                        events(Event::Error {
+                        events(Event::Failed {
                             ticket: p.ticket,
                             message: "the speaker didn't start. If this was a local or YouTube \
                                       song, it probably couldn't fetch it from this computer: \
@@ -287,8 +295,11 @@ fn start_song(
                     what: "Converting for Sonos (above 48 kHz)…".into(),
                 });
             }
-            let file = server::prepare_local(track)?;
-            let url = format!("{base}{}", server.offer(&file));
+            let folders = crate::config::Config::load()
+                .map(|c| c.library_roots())
+                .unwrap_or_default();
+            let file = server::prepare_local(track, &folders)?;
+            let url = format!("{base}{}", server.offer(&file, &folders)?);
             let meta = sonos::didl_http(
                 &track.title,
                 &track.artist,
@@ -307,7 +318,7 @@ fn start_song(
             });
             let browser = crate::youtube::account().map(|a| a.browser);
             let file = server::prepare_youtube(&track.uri, browser.as_deref())?;
-            let url = format!("{base}{}", server.offer(&file));
+            let url = format!("{base}{}", server.offer(&file, &[])?);
             let meta = sonos::didl_http(
                 &track.title,
                 &track.artist,
@@ -332,7 +343,7 @@ fn start_song(
                 &track.artist,
                 &track.album,
                 account,
-            )
+            )?
         }
     };
     if let Err(e) = sonos.play_uri(group, &link, &metadata) {

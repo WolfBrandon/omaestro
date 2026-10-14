@@ -52,7 +52,8 @@ pub fn link(track: &Track) -> Option<String> {
             .uri
             .strip_prefix("spotify:track:")
             .map(|id| format!("https://open.spotify.com/track/{id}")),
-        Source::YouTube => Some(format!("https://music.youtube.com/watch?v={}", track.uri)),
+        Source::YouTube => crate::youtube::is_video_id(&track.uri)
+            .then(|| format!("https://music.youtube.com/watch?v={}", track.uri)),
     }
 }
 

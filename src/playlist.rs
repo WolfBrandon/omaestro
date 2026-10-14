@@ -5,7 +5,7 @@
 
 use crate::config;
 use crate::library::{Db, Source, Track};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -82,6 +82,35 @@ pub fn file_for(dir: &Path, name: &str) -> PathBuf {
     ))
 }
 
+/// Where a playlist called `name` is saved, unless a different playlist is already there
+/// (`own` is the file this queue came from or was saved to, which it may replace). Names can
+/// share a file: "Road/Trip" and "Road:Trip" are both "Road-Trip.jspf".
+pub fn free_file(dir: &Path, name: &str, own: Option<&Path>) -> Result<PathBuf> {
+    let path = file_for(dir, name);
+    if path.exists() && own != Some(path.as_path()) {
+        bail!(
+            "there's already a playlist saved as \"{}\": choose another name",
+            stem(&path)
+        );
+    }
+    Ok(path)
+}
+
+/// `name`, or if a playlist is saved under it already, "name (Spotify)", then
+/// "name (Spotify) 2" and so on: for playlists opened from a service.
+pub fn unused_name(dir: &Path, name: &str, from: &str) -> String {
+    let mut candidate = name.to_string();
+    let mut n = 1;
+    while file_for(dir, &candidate).exists() {
+        candidate = match n {
+            1 => format!("{name} ({from})"),
+            n => format!("{name} ({from}) {n}"),
+        };
+        n += 1;
+    }
+    candidate
+}
+
 /// Writes the playlist, replacing a file of the same name.
 pub fn save(path: &Path, name: &str, tracks: &[Track]) -> Result<()> {
     if let Some(dir) = path.parent() {
@@ -110,10 +139,28 @@ pub fn rename(from: &Path, to: &Path, name: &str) -> Result<()> {
     let tmp = to.with_extension("jspf.tmp");
     std::fs::write(&tmp, serde_json::to_string_pretty(&doc)?)
         .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, to)?;
-    if from != to {
-        std::fs::remove_file(from)?;
+    if from == to {
+        std::fs::rename(&tmp, to)?;
+        return Ok(());
     }
+    // A link fails if `to` exists, where a rename would replace it: another playlist is
+    // never written over.
+    match std::fs::hard_link(&tmp, to) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp);
+            bail!("{} already exists", to.display());
+        }
+        // A drive without links: look first, then rename.
+        Err(_) if !to.exists() => std::fs::rename(&tmp, to)?,
+        Err(_) => {
+            let _ = std::fs::remove_file(&tmp);
+            bail!("{} already exists", to.display());
+        }
+    }
+    std::fs::remove_file(from)?;
     Ok(())
 }
 
@@ -349,6 +396,60 @@ mod tests {
         let (name, loaded) = load(&new, &db).unwrap();
         assert_eq!(name, "Road trip");
         assert_eq!(loaded.len(), tracks.len());
+    }
+
+    /// Another playlist is never written over: not by renaming onto its name, nor by a name
+    /// that shares its file, nor by a playlist opened from Spotify with the same name.
+    #[test]
+    fn never_replaces_another_playlist() {
+        let tmp = TempDir::new("playlist-collide");
+        let db = sample_library(&tmp.0);
+        let tracks = db.tracks_in("/m/Abba/Gold").unwrap();
+        let (mix, saturday) = (file_for(&tmp.0, "Mix"), file_for(&tmp.0, "Saturday"));
+        save(&mix, "Mix", &tracks[..1]).unwrap();
+        save(&saturday, "Saturday", &tracks).unwrap();
+
+        assert!(free_file(&tmp.0, "Saturday", Some(&mix)).is_err());
+        assert!(
+            free_file(&tmp.0, "Saturday", None).is_err(),
+            "naming an unsaved queue"
+        );
+        assert_eq!(
+            free_file(&tmp.0, "Saturday", Some(&saturday)).unwrap(),
+            saturday
+        );
+        assert_eq!(
+            free_file(&tmp.0, "Sunday", Some(&mix)).unwrap(),
+            file_for(&tmp.0, "Sunday")
+        );
+        let road = file_for(&tmp.0, "Road:Trip");
+        save(&road, "Road:Trip", &tracks).unwrap();
+        assert!(
+            free_file(&tmp.0, "Road/Trip", None).is_err(),
+            "the same file name"
+        );
+
+        // Even asked directly, rename leaves Saturday alone.
+        assert!(rename(&mix, &saturday, "Saturday").is_err());
+        assert!(mix.exists());
+        let (name, loaded) = load(&saturday, &db).unwrap();
+        assert_eq!((name.as_str(), loaded.len()), ("Saturday", tracks.len()));
+
+        assert_eq!(unused_name(&tmp.0, "Episode 2", "Spotify"), "Episode 2");
+        assert_eq!(
+            unused_name(&tmp.0, "Saturday", "Spotify"),
+            "Saturday (Spotify)"
+        );
+        save(
+            &file_for(&tmp.0, "Saturday (Spotify)"),
+            "Saturday (Spotify)",
+            &tracks,
+        )
+        .unwrap();
+        assert_eq!(
+            unused_name(&tmp.0, "Saturday", "Spotify"),
+            "Saturday (Spotify) 2"
+        );
     }
 
     #[test]

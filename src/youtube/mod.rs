@@ -3,8 +3,9 @@
 //! There's no official API. Search and library come from the same web API the YouTube Music
 //! site uses ("InnerTube"). Streams come from `yt-dlp`, which keeps up with YouTube's changes.
 //!
-//! Signing in borrows your browser's YouTube login: `yt-dlp` reads the browser's cookies and
-//! writes the YouTube ones to `~/.config/omaestro/ytm-cookies.txt` (readable only by you).
+//! Signing in borrows your browser's YouTube login: `yt-dlp` exports the browser's cookies
+//! into a private folder, and OMAESTRO keeps only YouTube's, in
+//! `~/.config/omaestro/ytm-cookies.txt` (readable only by you). The rest are deleted.
 //! OMAESTRO never sees your password. YouTube may ask for a fresh login now and then; connect
 //! again in Settings. The yt-dlp wiki warns that heavy use with cookies could get an account
 //! flagged, so OMAESTRO only makes the requests you ask for.
@@ -143,15 +144,38 @@ fn which(program: &str) -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
+/// Whether `id` looks like a YouTube video id: 11 letters, digits, `-` or `_`. Ids from a
+/// playlist file could be anything, and they end up in file names and yt-dlp's arguments.
+pub fn is_video_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// An error unless `id` is a YouTube video id.
+pub fn check_id(id: &str) -> Result<()> {
+    if !is_video_id(id) {
+        bail!("{id:?} isn't a YouTube Music song id");
+    }
+    Ok(())
+}
+
 /// Copies the YouTube login from `browser` and checks it works. Returns the account name.
 /// Takes a few seconds (yt-dlp may unlock the browser's keyring).
 pub fn connect(browser: &str) -> Result<String> {
+    use std::os::unix::fs::DirBuilderExt;
     let path = secrets::path(COOKIES);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("new");
-    let _ = std::fs::remove_file(&tmp);
+    let config = crate::config::private_dir(&crate::config::config_dir())?;
+    // yt-dlp exports every site's cookies. They go into a folder only you can open, made
+    // before yt-dlp writes, and removed however this ends. (The file itself must not exist
+    // yet: yt-dlp reads an existing one first, and refuses an empty one.)
+    let export = Export(config.join(format!(
+        ".cookies-{}",
+        secrets::random_string(12, b"abcdefghijklmnopqrstuvwxyz0123456789")?
+    )));
+    std::fs::DirBuilder::new().mode(0o700).create(&export.0)?;
+    let tmp = export.0.join("cookies.txt");
     // With no URL yt-dlp writes the cookie file and then complains there's nothing to do.
     let out = Command::new("yt-dlp")
         .args([
@@ -164,7 +188,8 @@ pub fn connect(browser: &str) -> Result<String> {
         .stdin(Stdio::null())
         .output()
         .context("running yt-dlp (is it installed?)")?;
-    if !tmp.is_file() {
+    let exported = std::fs::read_to_string(&tmp).unwrap_or_default();
+    if exported.trim().is_empty() {
         let err = String::from_utf8_lossy(&out.stderr);
         let last = err
             .lines()
@@ -173,14 +198,12 @@ pub fn connect(browser: &str) -> Result<String> {
             .unwrap_or("no cookie file");
         bail!("Couldn't read {browser}'s cookies: {last}");
     }
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    let cookies = Cookies::parse(&std::fs::read_to_string(&tmp)?);
-    if !cookies.signed_in() {
-        let _ = std::fs::remove_file(&tmp);
+    let kept = youtube_only(&exported);
+    if !Cookies::parse(&kept).signed_in() {
         bail!("{browser} isn't signed in to YouTube. Sign in at music.youtube.com there first.");
     }
-    std::fs::rename(&tmp, &path)?;
+    write_private(&path, &kept)?;
+    drop(export);
     let mut client = Client::new()?;
     let user = client
         .account_name()
@@ -193,6 +216,70 @@ pub fn connect(browser: &str) -> Result<String> {
         },
     )?;
     Ok(user)
+}
+
+/// The folder yt-dlp exports into; removed, with everything in it, when dropped.
+struct Export(PathBuf);
+
+impl Drop for Export {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Writes `text` to `path`, readable only by you, in one go.
+fn write_private(path: &std::path::Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = path.with_extension("new");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?
+        .write_all(text.as_bytes())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Whether a cookie-file domain is YouTube's: "youtube.com", ".youtube.com",
+/// "music.youtube.com"; not "notyoutube.com".
+fn youtube_domain(domain: &str) -> bool {
+    let domain = domain.trim_start_matches('.');
+    domain == "youtube.com" || domain.ends_with(".youtube.com")
+}
+
+/// A cookie file (Netscape format) cut down to YouTube's cookies; comments are kept.
+pub fn youtube_only(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let cookie = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+        let keep = if cookie.starts_with('#') || cookie.trim().is_empty() {
+            true
+        } else {
+            youtube_domain(cookie.split('\t').next().unwrap_or(""))
+        };
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Cuts a saved cookie file from before 0.9.7, which held every site's cookies, down to
+/// YouTube's. Does nothing if there's no file or it's already cut down.
+pub fn tidy_cookies() -> Result<()> {
+    let path = secrets::path(COOKIES);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let kept = youtube_only(&text);
+    if kept != text {
+        write_private(&path, &kept)?;
+    }
+    Ok(())
 }
 
 /// Cookies from a Netscape-format cookie file, the ones YouTube Music needs.
@@ -213,8 +300,7 @@ impl Cookies {
             if fields.len() != 7 {
                 continue;
             }
-            let domain = fields[0].trim_start_matches('.');
-            if !(domain == "youtube.com" || domain.ends_with(".youtube.com")) {
+            if !youtube_domain(fields[0]) {
                 continue;
             }
             let expires: u64 = fields[4].parse().unwrap_or(0);
@@ -613,6 +699,7 @@ pub struct Stream {
 
 /// Asks yt-dlp for the best audio of a song, with your login when connected (Premium quality).
 pub fn resolve(video_id: &str) -> Result<Stream> {
+    check_id(video_id)?;
     let mut cmd = Command::new("yt-dlp");
     cmd.args(["--ignore-config", "-j", "-f", "bestaudio", "--no-warnings"]);
     if let Some(account) = account() {
@@ -699,6 +786,46 @@ mod tests {
             ]
         );
         assert!(chromium_profiles("not json").is_empty());
+    }
+
+    /// Only YouTube's cookies are kept from an export of every site's.
+    #[test]
+    fn keeps_only_youtube_cookies() {
+        let export = "# Netscape HTTP Cookie File\n\
+            .youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tyt\n\
+            #HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tyt2\n\
+            music.youtube.com\tFALSE\t/\tTRUE\t0\tPREF\tyt3\n\
+            .bank.example\tTRUE\t/\tTRUE\t0\tsession\tsecret\n\
+            #HttpOnly_.mail.example\tTRUE\t/\tTRUE\t0\tSID\tsecret\n\
+            notyoutube.com\tTRUE\t/\tTRUE\t0\tx\tsecret\n\
+            .google.com\tTRUE\t/\tTRUE\t0\tSID\tsecret\n";
+        let kept = youtube_only(export);
+        assert!(!kept.contains("secret"), "{kept}");
+        for name in [
+            "SAPISID",
+            "LOGIN_INFO",
+            "PREF",
+            "# Netscape HTTP Cookie File",
+        ] {
+            assert!(kept.contains(name), "{name} kept");
+        }
+        assert_eq!(
+            youtube_only(&kept),
+            kept,
+            "cutting down again changes nothing"
+        );
+        assert!(is_video_id("dQw4w9WgXcQ"));
+        for bad in [
+            "",
+            "dQw4w9WgXc",
+            "/../../tmp/x",
+            "dQw4w9WgXc/",
+            "dQw4w9WgXcQQ",
+        ] {
+            assert!(!is_video_id(bad), "{bad:?}");
+        }
+        assert!(resolve("../../etc/x").is_err());
+        assert!(crate::sonos::server::prepare_youtube("-o/tmp/x", None).is_err());
     }
 
     #[test]

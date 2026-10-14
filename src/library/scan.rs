@@ -112,7 +112,12 @@ pub fn scan(
                 .collect()
         });
         summary.unreadable += items.iter().filter(|(_, _, ok)| !ok).count();
-        let rows: Vec<(Track, Stamp)> = items.into_iter().map(|(t, s, _)| (t, s)).collect();
+        // A file whose tags couldn't be read (the NAS blinked, say) is listed by its file
+        // name, without its stamp, so the next scan tries it again.
+        let rows: Vec<(Track, Stamp)> = items
+            .into_iter()
+            .map(|(t, s, ok)| (t, if ok { s } else { (0, 0) }))
+            .collect();
         db.upsert(&rows)?;
     }
     if total > 0 {
@@ -124,7 +129,8 @@ pub fn scan(
     db.delete(&gone)?;
     summary.removed = gone.len();
 
-    if summary.updated > 0 || summary.removed > 0 {
+    // Also when an earlier scan saved its changes but stopped before this step.
+    if summary.updated > 0 || summary.removed > 0 || db.behind()? {
         progress(Progress::Finishing);
         db.rebuild_derived()?;
     }
@@ -517,6 +523,66 @@ mod tests {
         assert_eq!(db.artists().unwrap(), vec![UNKNOWN_ARTIST]);
     }
 
+    /// A scan that saved its changes but stopped before rebuilding the album list and search
+    /// is finished by the next one, even though no file changed in between.
+    #[test]
+    fn an_interrupted_scan_is_finished_next_time() {
+        if !have("ffmpeg") {
+            eprintln!("skipping: needs ffmpeg");
+            return;
+        }
+        let tmp = TempDir::new("scan-interrupted");
+        let music = tmp.0.join("music");
+        flac(
+            &music.join("Abba/Gold/01 - Waterloo.flac"),
+            &[("title", "Waterloo"), ("artist", "ABBA"), ("album", "Gold")],
+        );
+        let mut db = Db::open(&tmp.0.join("index.db")).unwrap();
+        // Stop at "Finishing": the tracks are saved, the rebuild never happens.
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scan(&mut db, std::slice::from_ref(&music), 1, |p| {
+                if matches!(p, Progress::Finishing) {
+                    panic!("OMAESTRO stops here (this panic is part of the test)");
+                }
+            })
+        }));
+        assert!(stopped.is_err());
+        assert_eq!(db.track_count().unwrap(), 1);
+        assert!(
+            db.search("waterloo", 10).unwrap().is_empty(),
+            "search is behind"
+        );
+        assert!(db.behind().unwrap());
+
+        let s = scan_dir(&mut db, &music);
+        assert_eq!((s.updated, s.removed), (0, 0), "no file changed");
+        assert_eq!(db.search("waterloo", 10).unwrap().len(), 1);
+        assert_eq!(db.albums().unwrap().len(), 1);
+        assert!(!db.behind().unwrap());
+    }
+
+    /// An index from before 0.9.7 left behind by an interrupted scan has no mark, but its
+    /// album list doesn't add up to its tracks: that's noticed too.
+    #[test]
+    fn an_index_whose_albums_dont_add_up_is_rebuilt() {
+        let tmp = TempDir::new("scan-behind");
+        let mut db = Db::open(&tmp.0.join("index.db")).unwrap();
+        assert!(!db.behind().unwrap(), "an empty index is fine");
+        let track = Track {
+            path: "/m/a.flac".into(),
+            album_dir: "/m".into(),
+            title: "A".into(),
+            ..Track::default()
+        };
+        db.upsert(&[(track, (1, 1))]).unwrap();
+        db.rebuild_derived().unwrap();
+        assert!(!db.behind().unwrap());
+        db.conn_for_tests()
+            .execute("DELETE FROM albums", [])
+            .unwrap();
+        assert!(db.behind().unwrap());
+    }
+
     #[test]
     fn a_file_that_vanished_has_no_stamp() {
         let tmp = TempDir::new("stat");
@@ -545,8 +611,9 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
-            s.updated, 1,
-            "the new file in the readable folder is indexed"
+            s.updated, 2,
+            "the new file in the readable folder is indexed, and A is tried again (its tags \
+             couldn't be read)"
         );
         assert_eq!(s.removed, 0, "B is unreadable, not gone, so it stays");
         assert_eq!(db.track_count().unwrap(), 3);

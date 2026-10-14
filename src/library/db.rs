@@ -89,7 +89,27 @@ impl Db {
             conn.execute_batch(SCHEMA)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        // Marks such as "the album list and search are behind the tracks". Added in 0.9.7,
+        // to indexes of any version, so no rescan is needed for it.
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS marks (name TEXT PRIMARY KEY)")?;
         Ok(Db { conn })
+    }
+
+    /// Whether the album list and search need rebuilding from the tracks: changes were saved
+    /// but the rebuild didn't finish (OMAESTRO stopped in between, say), or the album list
+    /// doesn't add up to the tracks (an index from before that was noted).
+    pub fn behind(&self) -> Result<bool> {
+        let marked: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM marks WHERE name = 'behind')",
+            [],
+            |r| r.get(0),
+        )?;
+        let (tracks, in_albums): (i64, i64) = self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM tracks),              (SELECT COALESCE(SUM(tracks), 0) FROM albums)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(marked || tracks != in_albums)
     }
 
     /// Every indexed file with its size and mtime.
@@ -138,6 +158,9 @@ impl Db {
                 ])?;
             }
         }
+        if !items.is_empty() {
+            tx.execute("INSERT OR IGNORE INTO marks VALUES ('behind')", [])?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -149,6 +172,9 @@ impl Db {
             for path in paths {
                 stmt.execute([path])?;
             }
+        }
+        if !paths.is_empty() {
+            tx.execute("INSERT OR IGNORE INTO marks VALUES ('behind')", [])?;
         }
         tx.commit()?;
         Ok(())
@@ -185,8 +211,14 @@ impl Db {
             }
         }
         tx.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')", [])?;
+        tx.execute("DELETE FROM marks WHERE name = 'behind'", [])?;
         tx.commit()?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn conn_for_tests(&self) -> &Connection {
+        &self.conn
     }
 
     pub fn track_count(&self) -> Result<i64> {

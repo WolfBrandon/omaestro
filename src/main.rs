@@ -110,6 +110,9 @@ enum Exit {
 fn run_player(resume: bool) -> Result<()> {
     let mut watch = update::Watch::new();
     let config = Config::load()?;
+    // Tidying from before 0.9.7: sign-ins only you can list, and only YouTube's cookies kept.
+    let _ = config::private_dir(&config::config_dir());
+    let _ = youtube::tidy_cookies();
     let (mpv_tx, mpv_rx) = mpsc::channel();
     let options = Options {
         audio_device: config.playback.audio_device.clone(),
@@ -662,9 +665,19 @@ fn apply(
             app.status = "Queue cleared (Ctrl+Z brings it back)".into();
         }
         Action::SavePlaylist(name) => {
-            let path = playlist::file_for(&app.playlist_dir, &name);
-            match playlist::save(&path, &name, player.queue()) {
-                Ok(()) => {
+            // The queue's own playlist saves over its file; a new name needs one of its own.
+            let own = player
+                .playlist
+                .as_ref()
+                .filter(|p| p.name == name)
+                .map(|p| p.path.clone());
+            let path = match own {
+                Some(path) => Ok(path),
+                None => playlist::free_file(&app.playlist_dir, &name, None),
+            };
+            match path.and_then(|path| playlist::save(&path, &name, player.queue()).map(|()| path))
+            {
+                Ok(path) => {
                     app.status = format!("Saved {name}");
                     player.playlist = Some(player::Named {
                         name,
@@ -690,8 +703,16 @@ fn apply(
                 "Opened {name}{from}: {} · Space or ⏎ plays",
                 plural(tracks.len(), "song")
             );
-            // A Spotify or YouTube Music playlist keeps its name; s saves it under that name.
-            let path = path.unwrap_or_else(|| playlist::file_for(&app.playlist_dir, &name));
+            // A Spotify or YouTube Music playlist keeps its name, and s saves it under that
+            // name; unless a playlist here has it already, then it's "Name (Spotify)".
+            let (name, path) = match path {
+                Some(path) => (name, path),
+                None => {
+                    let name = playlist::unused_name(&app.playlist_dir, &name, source.name());
+                    let path = playlist::file_for(&app.playlist_dir, &name);
+                    (name, path)
+                }
+            };
             player.load(
                 tracks,
                 Some(player::Named {
@@ -703,7 +724,14 @@ fn apply(
             app.queue_sel = 0;
         }
         Action::RenamePlaylist(name) => {
-            let path = playlist::file_for(&app.playlist_dir, &name);
+            let own = player.playlist.as_ref().map(|p| p.path.clone());
+            let path = match playlist::free_file(&app.playlist_dir, &name, own.as_deref()) {
+                Ok(path) => path,
+                Err(e) => {
+                    app.status = format!("Couldn't rename it: {e:#}");
+                    return Ok(());
+                }
+            };
             let renamed = match player.playlist.clone() {
                 // Saved before: its file is renamed too.
                 Some(old) if old.path.exists() && old.path != path => {

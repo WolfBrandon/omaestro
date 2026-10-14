@@ -129,11 +129,7 @@ impl Spotify {
 
     /// GET an API path such as "/me" or a full "next" URL from a paged reply.
     fn get(&mut self, path: &str) -> Result<Value> {
-        let url = if path.starts_with("https://") {
-            path.to_string()
-        } else {
-            format!("{API}{path}")
-        };
+        let url = api_url(path)?;
         for attempt in 0..2 {
             let token = self.token()?;
             let mut res = self
@@ -285,13 +281,23 @@ pub fn form_encode(s: &str) -> String {
     out
 }
 
+/// A Web API path ("/me/playlists"), or one of Spotify's own "next page" links. Your sign-in
+/// goes with every request, so a link anywhere but Spotify is refused.
+fn api_url(path: &str) -> Result<String> {
+    match path.strip_prefix("https://") {
+        Some(rest) if rest.starts_with("api.spotify.com/") => Ok(path.to_string()),
+        Some(_) => bail!("Spotify's answer pointed somewhere else: {path}"),
+        None => Ok(format!("{API}{path}")),
+    }
+}
+
 /// What the sign-in page needs: the code verifier we keep and the challenge we send.
-fn pkce_pair() -> (String, String) {
+fn pkce_pair() -> Result<(String, String)> {
     let verifier = secrets::random_string(
         64,
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~",
-    );
-    (verifier.clone(), challenge(&verifier))
+    )?;
+    Ok((verifier.clone(), challenge(&verifier)))
 }
 
 fn challenge(verifier: &str) -> String {
@@ -342,8 +348,8 @@ pub fn login(
     let listener = TcpListener::bind(("127.0.0.1", PORT))
         .with_context(|| format!("port {PORT} is busy, so Spotify can't send the sign-in back"))?;
     listener.set_nonblocking(true)?;
-    let (verifier, challenge) = pkce_pair();
-    let state = secrets::random_string(24, b"abcdefghijklmnopqrstuvwxyz0123456789");
+    let (verifier, challenge) = pkce_pair()?;
+    let state = secrets::random_string(24, b"abcdefghijklmnopqrstuvwxyz0123456789")?;
     let url = authorize_url(&client_id, &challenge, &state);
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
@@ -387,15 +393,15 @@ fn wait_for_code(listener: &TcpListener, state: &str, stop: &AtomicBool) -> Resu
                 (k == key).then(|| v.to_string())
             })
         };
-        let (ok, message) = match (param("code"), param("state"), param("error")) {
-            (Some(code), Some(s), _) if s == state => {
-                (Some(code), "OMAESTRO is connected to Spotify.")
-            }
-            (_, _, Some(_)) => (None, "Spotify sign-in was cancelled."),
-            _ => (
-                None,
-                "That sign-in didn't match. Please start again from OMAESTRO.",
-            ),
+        // Only Spotify's answer to this sign-in carries our `state`. Anything else (another
+        // program, a web page poking at this port) is turned away, and the wait goes on.
+        if param("state").as_deref() != Some(state) {
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+            continue;
+        }
+        let (ok, message) = match (param("code"), param("error")) {
+            (Some(code), None) => (Some(code), "OMAESTRO is connected to Spotify."),
+            _ => (None, "Spotify sign-in was cancelled."),
         };
         let page = format!(
             "<!doctype html><meta charset=utf-8><title>OMAESTRO</title>\
@@ -476,7 +482,7 @@ mod tests {
             challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         );
-        let (verifier, ch) = pkce_pair();
+        let (verifier, ch) = pkce_pair().unwrap();
         assert_eq!(verifier.len(), 64);
         assert_eq!(ch, challenge(&verifier));
     }
@@ -514,6 +520,39 @@ mod tests {
         assert_eq!(t.isrc, "USNO11000135");
         assert_eq!(t.art_url, "https://i.scdn.co/300");
         assert!(track(&json!({"uri": "spotify:local:x", "is_local": true})).is_none());
+    }
+
+    #[test]
+    fn only_spotify_gets_the_sign_in() {
+        assert_eq!(api_url("/me").unwrap(), format!("{API}/me"));
+        let next = "https://api.spotify.com/v1/me/playlists?offset=50&limit=50";
+        assert_eq!(api_url(next).unwrap(), next);
+        assert!(api_url("https://example.invalid/collect").is_err());
+        assert!(api_url("https://api.spotify.com.example.invalid/v1").is_err());
+    }
+
+    /// Requests that don't carry this sign-in's `state` are turned away without ending the
+    /// wait; Spotify's own answer still gets through.
+    #[test]
+    fn stray_requests_dont_end_the_sign_in() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ask = move |target: &str| {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(s, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+            let mut answer = String::new();
+            let _ = std::io::Read::read_to_string(&mut s, &mut answer);
+            answer
+        };
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| wait_for_code(&listener, "right", &stop));
+            assert!(ask("/callback?error=access_denied").starts_with("HTTP/1.1 400"));
+            assert!(ask("/callback?code=evil&state=wrong").starts_with("HTTP/1.1 400"));
+            assert!(ask("/callback?code=good&state=right").contains("connected to Spotify"));
+            assert_eq!(waiting.join().unwrap().unwrap(), "good");
+        });
     }
 
     #[test]

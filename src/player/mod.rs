@@ -477,13 +477,16 @@ impl Player {
                 let group = group.clone();
                 self.hand_over(Engine::Sonos)?;
                 self.ensure_sonos()?;
-                if let Some(s) = &self.sonos {
-                    s.send(sonos::Command::Play {
+                match &self.sonos {
+                    Some(s) => s.send(sonos::Command::Play {
                         ticket,
                         track,
                         group,
                         start,
-                    });
+                    }),
+                    // Not found yet, or its port is busy (the error says): nothing plays, and
+                    // Space tries again.
+                    None => self.stopped(),
                 }
             }
             (Output::Here(_), Source::Local) => {
@@ -1163,6 +1166,15 @@ impl Player {
         Ok(())
     }
 
+    /// Nothing is playing any more, but the queue stays on the same song.
+    fn stopped(&mut self) {
+        self.engine = Engine::None;
+        self.status.idle = true;
+        self.status.paused = false;
+        self.status.preparing = None;
+        self.anchor = None;
+    }
+
     fn sonos_event(&mut self, event: sonos::Event) -> Result<()> {
         let current = |t: u64| t == self.ticket && self.engine == Engine::Sonos;
         match event {
@@ -1198,14 +1210,19 @@ impl Player {
                 self.anchor = (state == "PLAYING").then(|| (position, Instant::now()));
             }
             sonos::Event::Ended { ticket } if current(ticket) => self.advance()?,
+            // Stopped on the same song, with the reason; Space tries it again. Not skipped:
+            // what stops one song on Sonos (the firewall, the Spotify link) usually stops the
+            // next one too.
+            sonos::Event::Failed { ticket, message } if current(ticket) => {
+                self.stopped();
+                self.status.last_error = Some(format!("Sonos: {message}"));
+            }
             sonos::Event::Error { ticket, message } if current(ticket) || ticket == 0 => {
                 self.status.preparing = None;
                 self.status.last_error = Some(format!("Sonos: {message}"));
             }
             sonos::Event::TakenOver { ticket } if current(ticket) => {
-                self.engine = Engine::None;
-                self.status.idle = true;
-                self.anchor = None;
+                self.stopped();
                 self.status.last_error =
                     Some("The Sonos group is playing something else now".into());
             }
@@ -1446,6 +1463,71 @@ mod tests {
         );
         player.set_output(Output::Here(String::new())).unwrap();
         assert_eq!(player.status.volume, 80.0, "this computer's again");
+    }
+
+    /// A Sonos song that can't start leaves nothing playing, on the same song, so Space plays
+    /// it again (it used to send pause and resume to nothing). Speakers that haven't been
+    /// found yet do the same. No speakers are contacted.
+    #[test]
+    fn a_sonos_song_that_cant_start_can_be_tried_again() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-sonos-fail");
+        let (mut player, _rx) = silent(&tmp);
+        player.queue = vec![Track::default(), Track::default()];
+        player.current = Some(0);
+        player.engine = Engine::Sonos;
+        player.status.idle = false;
+        let ticket = player.ticket;
+        player
+            .handle(Event::Sonos(sonos::Event::Error {
+                ticket,
+                message: "a seek went wrong".into(),
+            }))
+            .unwrap();
+        assert!(!player.status.idle, "a passing error doesn't stop the song");
+        player
+            .handle(Event::Sonos(sonos::Event::Failed {
+                ticket,
+                message: "the speaker didn't start".into(),
+            }))
+            .unwrap();
+        assert!(player.status.idle);
+        assert_eq!(player.engine, Engine::None);
+        assert_eq!(player.current_index(), Some(0), "still on the same song");
+        assert!(
+            player
+                .status
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("didn't start")
+        );
+
+        // Space plays it again: on Sonos, whose speakers haven't been found here.
+        player.output = Output::Sonos(crate::sonos::Group {
+            id: "G".into(),
+            coordinator: crate::sonos::Speaker {
+                uuid: "RINCON_TEST".into(),
+                room: "Den".into(),
+                ip: "192.0.2.10".into(),
+            },
+            rooms: vec!["Den".into()],
+            home_theater: false,
+        });
+        player.toggle_pause().unwrap();
+        assert!(player.status.idle, "nothing to play on, so stopped again");
+        assert_eq!(player.engine, Engine::None);
+        assert!(
+            player
+                .status
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("haven't been found")
+        );
     }
 
     #[test]

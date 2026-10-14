@@ -107,8 +107,9 @@ Everything is optional; open Settings with `F2` or the gear button.
    - Spotify ends sign-ins after six months; connect again then.
 3. **YouTube Music** (Settings → Sources → YouTube Music → Connect). Pick the browser (and,
    for Chromium-based ones, the profile) you're signed in to music.youtube.com with.
-   - yt-dlp copies that browser's YouTube cookies to `~/.config/omaestro/ytm-cookies.txt`
-     (readable only by you), and OMAESTRO uses them to search and play as you.
+   - yt-dlp exports that browser's cookies into a private folder. OMAESTRO keeps only
+     YouTube's, in `~/.config/omaestro/ytm-cookies.txt` (readable only by you), deletes the
+     rest straight away, and uses them to search and play as you.
    - Your desktop may ask to unlock the keyring.
    - The yt-dlp project warns that heavy automated use with cookies can get an account
      flagged. OMAESTRO only does what you'd do by hand.
@@ -216,7 +217,7 @@ never = []                              # speaker ids never to send anything to
 
 ## Files it uses
 
-- `~/.config/omaestro/config.toml`: settings.
+- `~/.config/omaestro/config.toml`: settings. The folder is readable only by you.
 - `~/.config/omaestro/spotify.json`, `soloist.json`, `youtube.json`, `ytm-cookies.txt`,
   `lastfm.json`, `listenbrainz.json`: sign-ins, readable only by you. Deleting one signs out.
 - `~/.local/share/omaestro/playlists/*.jspf`: your playlists (JSPF, a standard format).
@@ -224,7 +225,9 @@ never = []                              # speaker ids never to send anything to
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, once downloaded.
 - `~/.cache/omaestro/library.db`: the library index. Safe to delete; it's rebuilt.
 - `~/.cache/omaestro/sonos/`: songs converted or downloaded for Sonos, cleared after a week.
-- `~/.cache/omaestro/sonos.log`: every command that changed something on a speaker.
+- `~/.cache/omaestro/sonos.log`: every command that changed something on a speaker
+  (readable only by you; song addresses aren't written down). Past 1 MB the previous one is
+  kept as `sonos.log.old`.
 - `~/.cache/omaestro/soloist.log`: what was sent to Soloist and what it answered.
 - `~/.cache/omaestro/sonos-spotify-account`: Sonos's number for your Spotify account.
 - `$XDG_RUNTIME_DIR/omaestro/mpv.sock`: the control line to mpv while OMAESTRO runs.
@@ -238,7 +241,7 @@ never = []                              # speaker ids never to send anything to
   - Sonos speakers on your network;
   - Soloist, on this computer.
 - **Sign-ins** are stored in `~/.config/omaestro`, readable only by you. The YouTube Music
-  sign-in is a copy of your browser's YouTube cookies.
+  sign-in is a copy of your browser's YouTube cookies, and only those.
 - **Sonos:**
   - OMAESTRO sends only playback commands (play, pause, stop, seek, volume), and only to a
     group's coordinator.
@@ -246,8 +249,13 @@ never = []                              # speaker ids never to send anything to
     (surrounds, subs).
   - Everything else it sends is a read. Every command that changes something is logged in
     `sonos.log`, and speaker ids in `[sonos] never` are left alone entirely.
-- **The file server** on port 47100 serves only the songs OMAESTRO hands to a speaker, under
-  random addresses.
+- **The file server** on port 47100 opens the first time you play on Sonos, and stays open
+  until you quit. It:
+  - offers only the song playing now, under a random address, and nothing while Sonos is
+    stopped;
+  - answers only your Sonos speakers;
+  - serves only files inside your music folders, and OMAESTRO's own converted copies.
+- **See also** [SECURITY.md](SECURITY.md).
 
 ## Performance
 

@@ -3,8 +3,12 @@
 //! away can make even looking at a folder hang for minutes, and the screen never waits for one.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
+
+/// Folders whose last check hasn't come back yet (a NAS that hangs). They aren't asked again
+/// until it does, so checks stuck waiting on one don't pile up every couple of minutes.
+static ASKING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
@@ -57,11 +61,18 @@ pub fn within<T: Send + 'static>(
 
 /// The music folders: each one readable, missing, or not answering (a NAS gone away).
 pub fn local(folders: Vec<PathBuf>) -> Status {
+    let asking = || ASKING.lock().unwrap_or_else(|e| e.into_inner());
     let answers: Vec<Option<bool>> = folders
         .into_iter()
         .map(|folder| {
+            if asking().contains(&folder) {
+                return None;
+            }
+            asking().push(folder.clone());
             within(Duration::from_secs(3), move || {
-                std::fs::read_dir(folder).is_ok()
+                let ok = std::fs::read_dir(&folder).is_ok();
+                asking().retain(|f| *f != folder);
+                ok
             })
         })
         .collect();
@@ -137,6 +148,23 @@ pub fn sonos_from(answering: usize, groups: usize) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder whose last check is still stuck counts as not answering straight away,
+    /// without starting another check.
+    #[test]
+    fn a_stuck_folder_isnt_asked_again() {
+        let tmp = crate::testutil::TempDir::new("status-stuck");
+        let stuck = tmp.0.join("stuck");
+        ASKING.lock().unwrap().push(stuck.clone());
+        let started = std::time::Instant::now();
+        assert_eq!(local(vec![stuck.clone()]).health, Health::Bad);
+        assert!(started.elapsed() < Duration::from_secs(1), "no waiting");
+        ASKING.lock().unwrap().retain(|f| *f != stuck);
+
+        // A folder that answers is asked again next time.
+        assert_eq!(local(vec![tmp.0.clone()]).health, Health::Good);
+        assert!(!ASKING.lock().unwrap().contains(&tmp.0));
+    }
 
     #[test]
     fn each_source_gets_a_dot_and_a_word() {

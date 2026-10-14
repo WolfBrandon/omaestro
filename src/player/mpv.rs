@@ -66,7 +66,7 @@ impl Mpv {
         events: impl Fn(MpvEvent) -> bool + Send + 'static,
     ) -> Result<Mpv> {
         if let Some(dir) = socket.parent() {
-            std::fs::create_dir_all(dir)?;
+            crate::config::private_dir(dir)?;
         }
         // Someone answering on the socket means OMAESTRO is already open; taking the socket
         // over would cut that one off from its player.

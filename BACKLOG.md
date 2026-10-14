@@ -64,6 +64,17 @@ Today PipeWire runs everything at 48 kHz, so 44.1 and 96 kHz files are resampled
 
 # After 1.0.0
 
+## Hardening, from the October 2026 code reviews
+
+What wasn't fixed in 0.9.7, and why:
+- **Finding Sonos speakers by their own announcement (SSDP)** before falling back to
+  checking every address on the network for port 1400. Found speakers are remembered, so the
+  sweep only runs until then; still the quieter way.
+- **Checking the Soloist download.** Spotify publishes no checksum to compare it with; tar
+  already refuses files that would land outside its folder.
+- **Album art from playlist files:** fetch only from known picture hosts, or don't follow
+  redirects.
+
 ## Qobuz
 
 Qobuz as a source, like Spotify: search, your playlists and favourites, hi-res playback here

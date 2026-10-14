@@ -48,8 +48,23 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("ContentDirectory", &["Browse"]),
 ];
 
-/// Links a speaker may be told to play.
-const URI_SCHEMES: &[&str] = &["http://", "x-rincon-mp3radio:", "x-sonos-spotify:"];
+/// Whether `uri` is one of OMAESTRO's own song links, from its file server:
+/// "http://192.0.2.5:47100/f/k3j9x2a8qq01mz7d.flac".
+fn own_song_link(uri: &str) -> bool {
+    let Some((host, path)) = uri
+        .strip_prefix("http://")
+        .and_then(|rest| rest.split_once('/'))
+    else {
+        return false;
+    };
+    host.parse::<SocketAddr>().is_ok()
+        && path.strip_prefix("f/").is_some_and(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+        })
+}
 
 /// What the safety check knows about where a command is going.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,7 +142,8 @@ pub fn permit(
         if uri.starts_with("x-rincon:") {
             return Err(Refused("x-rincon: links join groups".into()));
         }
-        if !URI_SCHEMES.iter().any(|s| uri.starts_with(s)) {
+        // Only OMAESTRO's own song links, and Spotify songs through the speaker's own link.
+        if !own_song_link(uri) && !uri.starts_with("x-sonos-spotify:") {
             return Err(Refused(format!("won't play links like {uri:?}")));
         }
     }
@@ -469,7 +485,14 @@ impl Sonos {
             .get(uuid)
             .ok_or_else(|| anyhow!("no address for {uuid}"))?;
         if !is_read(action) {
-            log(&format!("{uuid} {service}.{action} {}", uri.unwrap_or("")));
+            // A song link from this computer works for whoever has it, so it isn't written
+            // down; Spotify links are.
+            let shown = match uri {
+                Some(u) if u.starts_with("http://") => "(a song from this computer)",
+                Some(u) => u,
+                None => "",
+            };
+            log(&format!("{uuid} {service}.{action} {shown}"));
         }
         soap(ip, service, action, args)
     }
@@ -730,13 +753,25 @@ fn clock_secs(t: &str) -> f64 {
         .fold(0.0, |acc, p| acc * 60.0 + p)
 }
 
-fn log(line: &str) {
+/// Adds a line to `sonos.log`, readable only by you. Past 1 MB it starts over, keeping the
+/// previous one as `sonos.log.old`.
+pub(crate) fn log(line: &str) {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    if cfg!(test) {
+        return;
+    }
     let path = crate::config::cache_dir().join("sonos.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1024 * 1024) {
+        let _ = std::fs::rename(&path, path.with_extension("log.old"));
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
+        .mode(0o600)
+        .open(&path)
     {
+        // Files from before 0.9.7 were made readable by everyone.
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
         let _ = writeln!(f, "{} {line}", crate::secrets::now_secs());
     }
 }
@@ -788,22 +823,31 @@ pub fn spotify_link(
     artist: &str,
     album: &str,
     account: SpotifyAccount,
-) -> (String, String) {
+) -> Result<(String, String)> {
+    // "spotify:track:" and a 22-letter id; anything else (from a playlist file, say) could
+    // carry text into the song's description.
+    let id_ok = uri
+        .strip_prefix("spotify:track:")
+        .is_some_and(|id| id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric()));
+    if !id_ok {
+        bail!("{uri:?} isn't a Spotify song");
+    }
     let SpotifyAccount { sid, sn, flags } = account;
     let kind = account.kind();
     let encoded = uri.replace(':', "%3a");
     let link = format!("x-sonos-spotify:{encoded}?sid={sid}&flags={flags}&sn={sn}");
     let meta = format!(
-        "{DIDL_OPEN}<item id=\"1003{flags:04x}{encoded}\" parentID=\"-1\" restricted=\"true\">\
+        "{DIDL_OPEN}<item id=\"1003{flags:04x}{}\" parentID=\"-1\" restricted=\"true\">\
          <dc:title>{}</dc:title><dc:creator>{}</dc:creator><upnp:album>{}</upnp:album>\
          <upnp:class>object.item.audioItem.musicTrack</upnp:class>\
          <desc id=\"cdudn\" nameSpace=\"urn:schemas-rinconnetworks-com:metadata-1-0/\">\
          SA_RINCON{kind}_X_#Svc{kind}-0-Token</desc></item></DIDL-Lite>",
+        escape(&encoded),
         escape(title),
         escape(artist),
         escape(album)
     );
-    (link, meta)
+    Ok((link, meta))
 }
 
 #[cfg(test)]
@@ -861,10 +905,23 @@ mod tests {
                 "AVTransport",
                 "SetAVTransportURI",
                 ARC,
-                Some("http://192.0.2.60:47100/t/1")
+                Some("http://192.0.2.60:47100/f/k3j9x2a8qq01mz7d.flac")
             )
             .is_ok()
         );
+        // Only OMAESTRO's own song links, and Spotify's.
+        for link in [
+            "http://example.com/song.mp3",
+            "http://192.0.2.60:47100/t/1",
+            "http://192.0.2.60:47100/f/../x",
+            "x-rincon-mp3radio://example.com/stream",
+            "x-file-cifs://nas/music/a.flac",
+        ] {
+            assert!(
+                ok("AVTransport", "SetAVTransportURI", ARC, Some(link)).is_err(),
+                "{link} must be refused"
+            );
+        }
         assert!(ok("GroupRenderingControl", "SetGroupVolume", ARC, None).is_ok());
         // Grouping or bonding, to Office or anywhere: refused.
         for action in [
@@ -993,7 +1050,8 @@ mod tests {
             "Rick",
             "Hits",
             old,
-        );
+        )
+        .unwrap();
         assert_eq!(
             link,
             "x-sonos-spotify:spotify%3atrack%3a4uLU6hMCjMI75M1A2tKUQC?sid=9&flags=8224&sn=1"
@@ -1023,7 +1081,9 @@ mod tests {
             "",
             "",
             found,
-        );
+        )
+        .unwrap();
+        assert!(spotify_link("spotify:track:x\" a=\"", "", "", "", found).is_err());
         assert_eq!(
             link,
             "x-sonos-spotify:spotify%3atrack%3a26q6YTrXt9l8qshIveiTX9?sid=12&flags=8232&sn=2"
