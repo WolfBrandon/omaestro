@@ -69,10 +69,14 @@ cd omaestro
 - the icon, in `~/.local/share/icons/hicolor/`;
 - a launcher entry, `~/.local/share/applications/org.omarchy.omaestro.desktop`.
 
-Run it again to update. A running OMAESTRO notices the new version:
-- **Nothing playing, or paused:** it switches straight away, in the same window.
-- **Playing:** it offers `U` to switch now, without stopping the music for more than a moment.
-  Otherwise it switches at the next pause.
+Run it again to update. A running OMAESTRO notices the new version: the version number in the
+bottom right turns from green to yellow, and clicking it opens Settings → About.
+- **Auto-update on** (the default):
+  - Nothing playing, or paused: it switches straight away, in the same window.
+  - Playing: it offers `U` to switch now, without stopping the music for more than a moment.
+    Otherwise it switches at the next pause.
+- **Auto-update off** (Settings → About): it only says so, and switches when you choose
+  Update now there, or press `U`.
 
 The queue, the song and your place in it come along. `./install.sh --uninstall` removes all
 three files, and your settings and playlists stay.
@@ -200,6 +204,9 @@ album = 28
 [outputs]                               # the picker's stars and hidden ones
 favourites = []
 hidden = []
+
+[updates]
+auto = true                             # switch to a newly installed version by itself
 
 [sonos]
 speakers = []                           # found by themselves, then remembered

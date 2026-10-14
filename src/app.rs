@@ -291,6 +291,8 @@ pub enum Target {
     SearchBox,
     /// The × at the top right of Search and Settings.
     CloseOverlay,
+    /// The version in the bottom right: Settings → About.
+    Version,
     /// File Info's Copy (the path or link) and Open (the folder or link) buttons.
     InfoCopy,
     InfoOpen,
@@ -429,6 +431,8 @@ pub struct App {
     pub themes: Vec<crate::theme::Installed>,
     /// The clock the visualizer's animations run on.
     pub animation_clock: Instant,
+    /// A newly installed version waiting to be switched to ("0.9.7").
+    pub update_ready: Option<String>,
     /// Where your plays are sent, if signed in.
     pub lastfm: Option<crate::integrations::LastFm>,
     pub listenbrainz: Option<crate::integrations::ListenBrainz>,
@@ -494,6 +498,7 @@ impl App {
             theme_fixed: false,
             themes: crate::theme::installed(),
             animation_clock: Instant::now(),
+            update_ready: None,
             lastfm: crate::integrations::LastFm::load(),
             listenbrainz: crate::integrations::ListenBrainz::load(),
             lastfm_cancel: None,
@@ -1214,6 +1219,7 @@ impl App {
             youtube: self.youtube_account.as_ref().map(|a| a.user.clone()),
             sonos: self.sonos_status.clone(),
             statuses: self.statuses.clone(),
+            update: self.update_ready.clone(),
             lastfm: self.lastfm.as_ref().map(|a| a.user.clone()),
             listenbrainz: self.listenbrainz.as_ref().map(|a| a.user.clone()),
             themes: self.themes.clone(),
@@ -2121,6 +2127,14 @@ impl App {
             }
             Target::CloseOverlay => {
                 self.overlay = None;
+                None
+            }
+            Target::Version => {
+                self.open_settings();
+                let rows = settings::rows(&self.config, &self.facts());
+                if let Some(Overlay::Settings(s)) = &mut self.overlay {
+                    s.go_to_section(&rows, settings::ABOUT);
+                }
                 None
             }
             Target::InfoCopy => {
@@ -3041,6 +3055,28 @@ pub mod tests {
             .find(|r| r.id == settings::Id::ListenBrainz)
             .unwrap();
         assert_eq!(lb_row.button, Some("Sign out"));
+    }
+
+    #[test]
+    fn clicking_the_version_opens_about() {
+        let tmp = TempDir::new("app-version");
+        let mut app = app(&tmp);
+        let ctx = Ctx {
+            queue: &[],
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+        };
+        let hits = [Hit {
+            area: Rect::new(110, 59, 8, 1),
+            target: Target::Version,
+        }];
+        click(&mut app, 112, 59, &hits, &ctx);
+        let rows = settings::rows(&app.config, &app.facts());
+        match &app.overlay {
+            Some(Overlay::Settings(s)) => assert_eq!(s.section(&rows), settings::ABOUT),
+            _ => panic!("Settings should be open"),
+        }
     }
 
     #[test]

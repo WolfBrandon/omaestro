@@ -65,7 +65,8 @@ pub enum Id {
     AlbumArt,
     Visualizer,
     Animation,
-    Info,
+    Version,
+    AutoUpdate,
     /// "Designed with OTIS": a link.
     Otis,
 }
@@ -172,6 +173,8 @@ pub struct Facts {
     pub sonos: String,
     /// How each source is doing, from the latest background check.
     pub statuses: crate::status::Statuses,
+    /// A newly installed version waiting to be switched to: "0.9.7".
+    pub update: Option<String>,
     /// Who's signed in to Last.fm and ListenBrainz.
     pub lastfm: Option<String>,
     pub listenbrainz: Option<String>,
@@ -446,13 +449,32 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         )
         .note(note),
     );
-    // About
-    rows.push(Row::new(
+    // About: the version, whether a newer one is waiting, and how updates happen.
+    use crate::status::{Health, Status};
+    let version = Row::new(
         ABOUT,
         "Version",
-        Id::Info,
+        Id::Version,
         Value::Text(format!("OMAESTRO v{}", env!("CARGO_PKG_VERSION"))),
-    ));
+    );
+    rows.push(match &facts.update {
+        Some(new) => version
+            .status(Some(Status::new(
+                Health::Warning,
+                format!("v{new} is ready"),
+            )))
+            .button("Update now"),
+        None => version.status(Some(Status::new(Health::Good, "up to date"))),
+    });
+    rows.push(
+        Row::new(
+            ABOUT,
+            "Auto-update",
+            Id::AutoUpdate,
+            on_off(config.updates.auto),
+        )
+        .note("after install.sh: now if idle, else at the next pause"),
+    );
     rows.push(Row::new(
         ABOUT,
         "Designed with",
@@ -696,6 +718,7 @@ impl Settings {
                 config.appearance.album_art = [Art::LoRes, Art::HiRes, Art::Off][n.min(2)]
             }
             Id::Visualizer => config.appearance.visualizer = on,
+            Id::AutoUpdate => config.updates.auto = on,
             Id::Animation => {
                 let kinds = crate::animation::Kind::ALL;
                 config.appearance.animation = kinds[n.min(kinds.len() - 1)];
@@ -730,6 +753,7 @@ impl Settings {
                 Outcome::Stay
             }
             (Id::Index, _) => Outcome::Do(Action::Rescan),
+            (Id::Version, Some(_)) => Outcome::Do(Action::Update),
             (Id::Sonos, _) => Outcome::FindSonos,
             (Id::Spotify, Some("Sign out")) => Outcome::SignOut(Source::Spotify),
             (Id::Spotify, _) => Outcome::Connect(Source::Spotify),
@@ -887,6 +911,46 @@ mod tests {
             status(Id::Sonos).as_deref(),
             Some("1 of 3 groups answering")
         );
+    }
+
+    #[test]
+    fn about_says_whether_its_up_to_date_and_how_updates_happen() {
+        use crate::status::Health;
+        let mut config = Config::default();
+        let row = |facts: &Facts, config: &Config, id: Id| {
+            rows(config, facts)
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap()
+        };
+        let current = row(&Facts::default(), &config, Id::Version);
+        assert_eq!(
+            current.status.map(|s| (s.health, s.word)),
+            Some((Health::Good, "up to date".into()))
+        );
+        assert_eq!(current.button, None);
+
+        let waiting = Facts {
+            update: Some("0.9.9".into()),
+            ..Facts::default()
+        };
+        let ready = row(&waiting, &config, Id::Version);
+        assert_eq!(ready.status.map(|s| s.word), Some("v0.9.9 is ready".into()));
+        assert_eq!(ready.button, Some("Update now"));
+        let all = rows(&config, &waiting);
+        let mut s = Settings::new(&all);
+        s.sel = all.iter().position(|r| r.id == Id::Version).unwrap();
+        assert_eq!(s.press(&mut config, &all), Outcome::Do(Action::Update));
+
+        // Auto-update: on unless switched off.
+        assert!(config.updates.auto);
+        s.sel = all.iter().position(|r| r.id == Id::AutoUpdate).unwrap();
+        assert_eq!(s.change(&mut config, &all, 1), Outcome::Saved);
+        assert!(!config.updates.auto);
+        assert!(matches!(
+            row(&waiting, &config, Id::AutoUpdate).value,
+            Value::Choice(_, 1)
+        ));
     }
 
     #[test]

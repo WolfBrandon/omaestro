@@ -20,6 +20,22 @@ pub struct Config {
     pub queue: crate::columns::QueueColumns,
     pub outputs: Outputs,
     pub sonos: Sonos,
+    pub updates: Updates,
+}
+
+/// What happens when a new version is installed (with install.sh) while OMAESTRO runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Updates {
+    /// Switch to it by itself: straight away if nothing's playing, otherwise at the next
+    /// pause. Off: only when asked (Settings → About, or U).
+    pub auto: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Updates { auto: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +139,7 @@ impl Default for Config {
             queue: crate::columns::QueueColumns::default(),
             outputs: Outputs::default(),
             sonos: Sonos::default(),
+            updates: Updates::default(),
         }
     }
 }

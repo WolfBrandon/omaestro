@@ -3,6 +3,16 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.6 — 2026-10-14
+
+- **Updating is your choice:** Settings → About → Auto-update, on or off.
+  - **On** (as before): a newly installed version is switched to by itself, straight away if
+    nothing's playing, otherwise at the next pause.
+  - **Off:** OMAESTRO only says so, and switches when you choose Update now, or press `U`.
+- **The version in the bottom right** is all that's there now. It's green when up to date and
+  yellow when a new version is waiting; clicking it opens Settings → About, where Update now
+  appears. "Designed with OTIS" moved to About.
+
 ## 0.9.5 — 2026-10-14
 
 - **Settings → Integrations**, a new section for where your plays will be sent.

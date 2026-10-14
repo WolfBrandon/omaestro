@@ -1195,8 +1195,8 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
     hints(buf, r, r.x + 2, r.y, pairs, t);
 }
 
-/// News on the left; the version and the design's credit on the right, where "OTIS" is a
-/// link to its repository.
+/// News on the left; the version on the right, green when up to date and yellow when a newly
+/// installed one is waiting. Clicking it opens Settings → About.
 fn draw_footer(
     buf: &mut Buffer,
     r: Rect,
@@ -1204,25 +1204,17 @@ fn draw_footer(
     t: &Theme,
     hit: &mut impl FnMut(Rect, Target),
 ) {
-    let version = format!("[v{}] ", env!("CARGO_PKG_VERSION"));
-    let credit = "Designed with ";
-    let full = width(&version) + width(credit) + width("OTIS");
-    if r.width >= width(&app.status) + 4 + full {
-        let x = r.right() - full;
-        let x = put(buf, r, x, r.y, &version, bold(t.fg));
-        let x = put(buf, r, x, r.y, credit, fg(t.dim));
-        put(
-            buf,
-            r,
-            x,
-            r.y,
-            "OTIS",
-            bold(t.accent).add_modifier(Modifier::UNDERLINED),
-        );
-        hit(
-            Rect::new(x, r.y, 4, 1),
-            Target::Link(crate::connect::Link::Otis),
-        );
+    let version = format!("[v{}]", env!("CARGO_PKG_VERSION"));
+    let w = width(&version);
+    if r.width >= width(&app.status) + 4 + w {
+        let x = r.right() - w;
+        let color = if app.update_ready.is_some() {
+            t.yellow
+        } else {
+            t.accent
+        };
+        put(buf, r, x, r.y, &version, bold(color));
+        hit(Rect::new(x, r.y, w, 1), Target::Version);
     }
     put(buf, r, r.x + 2, r.y, &app.status, fg(t.accent));
 }
@@ -1604,7 +1596,7 @@ mod tests {
                     "2 tracks · 6:00",
                     "● unsaved",
                     "ALBUM",
-                    "Designed with OTIS",
+                    concat!("[v", env!("CARGO_PKG_VERSION"), "]"),
                 ] {
                     assert!(text.contains(expected), "missing {expected:?}\n{text}");
                 }
@@ -1615,13 +1607,13 @@ mod tests {
                     Target::Queue(1),
                     Target::Save,
                     Target::PlaylistName,
-                    Target::Link(crate::connect::Link::Otis),
+                    Target::Version,
                 ] {
                     assert!(hits.iter().any(|h| h.target == target), "no {target:?}");
                 }
                 assert!(
-                    !text.contains("github.com"),
-                    "the footer shows no address\n{text}"
+                    !text.contains("Designed with"),
+                    "just the version in the corner\n{text}"
                 );
                 let area = |target: Target| hits.iter().find(|h| h.target == target).unwrap().area;
                 // The four playback buttons are the same size; so are Settings and Help.
@@ -1880,6 +1872,13 @@ mod tests {
                 if which == "listenbrainz" {
                     app.on_key(KeyEvent::from(KeyCode::Down), &ctx).unwrap();
                     app.on_key(KeyEvent::from(KeyCode::Enter), &ctx).unwrap();
+                }
+            }
+            // Settings at About.
+            "about" => {
+                app.open_settings();
+                for _ in 0..crate::settings::ABOUT {
+                    app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
                 }
             }
             // Settings at Appearance, on the theme row.

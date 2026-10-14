@@ -402,21 +402,28 @@ fn event_loop(
                 player.jump(i)?;
             }
         }
-        // A new version installed: switch now if nothing's playing, else offer U and switch
-        // at the next pause.
-        watch.poll();
+        // A new version installed. With auto-update on, switch now if nothing's playing, else
+        // offer U and switch at the next pause; with it off, only say so (the version in the
+        // corner turns yellow) and switch when asked.
+        if watch.poll() {
+            app.update_ready = watch.ready.clone();
+            dirty = true;
+        }
         if let Some(version) = &watch.ready {
             let playing = !player.status.idle && !player.status.paused;
-            match update::when(playing) {
-                update::Switch::Now => return Ok(Exit::Restart { resume: false }),
-                update::Switch::Wait if !update_offered => {
+            match (app.config.updates.auto, update::when(playing)) {
+                (true, update::Switch::Now) => return Ok(Exit::Restart { resume: false }),
+                _ if update_offered => {}
+                (true, update::Switch::Wait) => {
                     update_offered = true;
                     app.status = format!(
                         "v{version} is ready: U switches now, or it switches at the next pause"
                     );
-                    dirty = true;
                 }
-                update::Switch::Wait => {}
+                (false, _) => {
+                    update_offered = true;
+                    app.status = format!("v{version} is ready: U, or Settings → About, updates");
+                }
             }
         }
         // How the sources are doing, checked in the background every couple of minutes.
