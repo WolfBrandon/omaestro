@@ -49,7 +49,6 @@ const I_MUSIC: &str = "\u{f001}";
 const I_SEARCH: &str = "\u{f002}";
 const I_LIST: &str = "\u{f03a}";
 const I_SAVE: &str = "\u{f0c7}";
-const I_SAVE_AS: &str = "\u{f0c5}";
 const I_OPEN: &str = "\u{f07c}";
 const I_CLEAR: &str = "\u{f1f8}";
 const I_STAR: &str = "\u{f005}";
@@ -250,7 +249,8 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
         Some(Overlay::Picker { sel, all }) => {
             draw_picker(buf, area, a.output, app, player, *sel, *all, t, &mut hit)
         }
-        Some(Overlay::SaveAs(name)) => draw_save_as(buf, area, app, player, name, t, &mut hit),
+        // Renaming happens in the queue's header.
+        Some(Overlay::Rename { .. }) => {}
         Some(Overlay::Open(open)) => screens::draw_open(buf, area, open, t, &mut hit),
         Some(Overlay::Search) => screens::draw_search(buf, area, &app.search, player, t, &mut hit),
         Some(Overlay::Settings(s)) => {
@@ -912,27 +912,50 @@ fn draw_queue(
     let mut y = inner.y;
 
     if full {
-        // The list icon opens the show/hide-columns menu; then the playlist's name and its
-        // buttons, as in the design.
+        // The list icon opens the show/hide-columns menu; then the playlist's name (click it to
+        // rename it, which happens right here) and its buttons, as in the design.
         let icon = Rect::new(cx, y, 3, 1);
         put(buf, inner, cx, y, &format!("{I_LIST} ▾"), fg(t.fg));
         hit(icon, Target::ColumnsMenu);
         app.columns_anchor.set(Some(icon));
         let x = cx + 5;
-        let name = player
-            .playlist
-            .as_ref()
-            .map_or("Untitled", |p| p.name.as_str());
-        let x = put(buf, inner, x, y, &fit(name, 30), bold(t.bright));
-        let unsaved = !queue.is_empty()
-            && player
-                .playlist
-                .as_ref()
-                .is_none_or(|p| p.saved != player.revision);
-        let x = if unsaved {
-            put(buf, inner, x, y, "  ● unsaved", fg(t.orange))
-        } else {
-            x
+        let x = match &app.overlay {
+            Some(Overlay::Rename {
+                name: typed,
+                then_save,
+            }) => {
+                let w = 30.min(cr.saturating_sub(x + 2));
+                screens::field(buf, Rect::new(x, y, w, 1), typed, true, t);
+                // Renaming onto another playlist's name replaces it: say so first.
+                let path = crate::playlist::file_for(&app.playlist_dir, typed);
+                let mine = player.playlist.as_ref().is_some_and(|p| p.path == path);
+                let (note, color) = if !typed.trim().is_empty() && path.exists() && !mine {
+                    ("⏎ replaces the playlist with that name", t.yellow)
+                } else if *then_save {
+                    ("⏎ save · Esc cancel", t.dim)
+                } else {
+                    ("⏎ rename · Esc cancel", t.dim)
+                };
+                put(buf, inner, x + w + 2, y, note, fg(color))
+            }
+            _ => {
+                let name = player
+                    .playlist
+                    .as_ref()
+                    .map_or("Untitled", |p| p.name.as_str());
+                let end = put(buf, inner, x, y, &fit(name, 30), bold(t.bright));
+                hit(Rect::new(x, y, end - x, 1), Target::PlaylistName);
+                let unsaved = !queue.is_empty()
+                    && player
+                        .playlist
+                        .as_ref()
+                        .is_none_or(|p| p.saved != player.revision);
+                if unsaved {
+                    put(buf, inner, end, y, "  ● unsaved", fg(t.orange))
+                } else {
+                    end
+                }
+            }
         };
         let mut x = x.max(cx + 26) + 4;
         let summary = if queue.is_empty() {
@@ -947,17 +970,15 @@ fn draw_queue(
             )
         };
         let room = cr.saturating_sub(width(&summary) + 2);
-        for (icon, label, target) in [
-            (I_SAVE, "Save", Target::Save),
-            (I_SAVE_AS, "Save as…", Target::SaveAs),
-            (I_OPEN, "Open…", Target::Open),
-            (I_CLEAR, "Clear", Target::Clear),
+        for (icon, target) in [
+            (I_SAVE, Target::Save),
+            (I_OPEN, Target::Open),
+            (I_CLEAR, Target::Clear),
         ] {
-            let text = format!("{icon} {label}");
-            if x + width(&text) + 4 > room {
+            if x + width(icon) + 4 > room {
                 break;
             }
-            let area = pill(buf, inner, x, y, &text, t);
+            let area = pill(buf, inner, x, y, icon, t);
             hit(area, target);
             x = area.right() + 1;
         }
@@ -1413,7 +1434,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("d", "Remove it from the queue"),
         ("J  K", "Move it down or up"),
         ("^Z  c", "Undo the last change (anywhere), clear the queue"),
-        ("s  S", "Save, or save as a new playlist"),
+        ("s  S", "Save the playlist; rename it (or click its name)"),
         ("O", "Open a playlist (saved, Spotify, YouTube Music)"),
         ("C", "Show or hide columns (or click the list icon)"),
         ("", ""),
@@ -1445,44 +1466,6 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         inner.bottom().saturating_sub(1),
         note,
         fg(t.dim),
-    );
-}
-
-fn draw_save_as(
-    buf: &mut Buffer,
-    screen: Rect,
-    app: &App,
-    player: &Player,
-    name: &str,
-    t: &Theme,
-    hit: &mut impl FnMut(Rect, Target),
-) {
-    let r = centred(screen, 56, 8);
-    let inner = popup(buf, r, "SAVE QUEUE AS", t, hit);
-    let (cx, cr) = (inner.x + 1, inner.right().saturating_sub(2));
-    let field = Rect::new(cx, inner.y + 1, (cr + 1).saturating_sub(cx), 1);
-    fill(buf, field, Style::new().bg(t.selection));
-    let x = put(buf, field, field.x + 1, field.y, name, bold(t.bright));
-    put(buf, field, x, field.y, "▏", fg(t.accent));
-    // Saving over a different playlist is allowed, but say so first.
-    let path = crate::playlist::file_for(&app.playlist_dir, name);
-    let mine = player.playlist.as_ref().is_some_and(|p| p.path == path);
-    let (note, color) = if !name.trim().is_empty() && path.exists() && !mine {
-        (
-            "A playlist with this name exists: saving replaces it.",
-            t.yellow,
-        )
-    } else {
-        ("Saved in ~/.local/share/omaestro/playlists", t.dim)
-    };
-    put(buf, inner, cx, inner.y + 3, note, fg(color));
-    hints(
-        buf,
-        inner,
-        cx,
-        inner.bottom().saturating_sub(1),
-        &[("⏎", "save"), ("Esc", "cancel")],
-        t,
     );
 }
 
@@ -1604,7 +1587,6 @@ mod tests {
                     "QUEUE",
                     "Knowing Me",
                     "2 tracks · 6:00",
-                    "Save as…",
                     "● unsaved",
                     "ALBUM",
                     "Designed with OTIS",
@@ -1617,6 +1599,7 @@ mod tests {
                     Target::Seek,
                     Target::Queue(1),
                     Target::Save,
+                    Target::PlaylistName,
                     Target::Link(crate::connect::Link::Otis),
                 ] {
                     assert!(hits.iter().any(|h| h.target == target), "no {target:?}");
@@ -1674,7 +1657,7 @@ mod tests {
             key(&mut app, KeyCode::Char('M'));
             let (text, _) = frame(&app, 0.0);
             if (w, h) == (120, 60) {
-                assert!(text.contains("SAVE QUEUE AS"), "{text}");
+                assert!(text.contains("⏎ rename · Esc cancel"), "{text}");
             }
             key(&mut app, KeyCode::Esc);
             key(&mut app, KeyCode::Char('O'));

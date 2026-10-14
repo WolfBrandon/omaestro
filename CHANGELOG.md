@@ -3,6 +3,16 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.0 — 2026-10-14
+
+- **Rename a playlist by clicking its name** in the queue's header, or with `S`. You type the
+  new name right there; Enter renames, Esc cancels. A playlist that's been saved has its file
+  renamed too. "Save as…" is gone.
+- **Spotify and YouTube Music playlists keep their own names** in the queue ("Episode 2", not
+  "Untitled"); `s` saves a copy under that name.
+- The queue's Save, Open and Clear buttons are just icons now.
+- Settings has no Behaviour or Keys sections.
+
 ## 0.8.0 — 2026-10-13
 
 - **The queue comes back when you reopen OMAESTRO.**

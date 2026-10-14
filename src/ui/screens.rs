@@ -47,7 +47,7 @@ fn paragraph(buf: &mut Buffer, clip: Rect, x: u16, y: u16, text: &str, style: St
 }
 
 /// A one-line text box with a cursor: "▏".
-fn field(buf: &mut Buffer, r: Rect, text: &str, focused: bool, t: &Theme) {
+pub(super) fn field(buf: &mut Buffer, r: Rect, text: &str, focused: bool, t: &Theme) {
     fill(buf, r, Style::new().bg(t.selection));
     // Show the end of a long entry, so what's being typed stays in view.
     let room = r.width.saturating_sub(3);

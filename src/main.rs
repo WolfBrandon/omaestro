@@ -27,8 +27,8 @@ mod youtube;
 use anyhow::Result;
 use app::{Action, App, Ctx, News};
 use config::Config;
-use library::Db;
 use library::scan::{self, Progress, Summary};
+use library::{Db, Source};
 use player::Player;
 use player::mpv::Options;
 use ratatui::crossterm::event::{
@@ -329,7 +329,11 @@ fn event_loop(
 ) -> Result<()> {
     let mut dirty = true;
     // The queue is kept for next time whenever it or the song it's on changes.
-    let mut kept = (player.revision, player.current_index());
+    let mut kept = (
+        player.revision,
+        player.current_index(),
+        player.playlist.as_ref().map(|p| p.name.clone()),
+    );
     let mut theme_setting = app.config.appearance.theme.clone();
     let mut theme_file = ThemeFile::for_setting(&theme_setting);
     let mut theme_checked = Instant::now() - Duration::from_secs(60);
@@ -347,8 +351,13 @@ fn event_loop(
     // For a silent copy (Sonos): where in the song it started and when, to keep it in step.
     let mut vis_clock: Option<(f64, Instant)> = None;
     loop {
-        if (player.revision, player.current_index()) != kept {
-            kept = (player.revision, player.current_index());
+        let now = (
+            player.revision,
+            player.current_index(),
+            player.playlist.as_ref().map(|p| p.name.clone()),
+        );
+        if now != kept {
+            kept = now;
             let _ = session::save(&config::data_dir(), &player.session());
         }
         // A theme picked in Settings applies at once.
@@ -588,20 +597,51 @@ fn apply(
                 Err(e) => app.status = format!("Couldn't save {name}: {e:#}"),
             }
         }
-        Action::LoadPlaylist { name, path, tracks } => {
+        Action::LoadPlaylist {
+            name,
+            path,
+            tracks,
+            source,
+        } => {
             // Opening only fills the queue: say how to start it.
+            let from = match source {
+                Source::Local => String::new(),
+                other => format!(" from {}", other.name()),
+            };
             app.status = format!(
-                "Opened {name}: {} · Space or ⏎ plays",
+                "Opened {name}{from}: {} · Space or ⏎ plays",
                 plural(tracks.len(), "song")
             );
-            // Imported playlists have no file yet: s asks for a name to save them under.
-            let named = path.map(|path| player::Named {
-                name,
-                path,
-                saved: 0,
-            });
-            player.load(tracks, named)?;
+            // A Spotify or YouTube Music playlist keeps its name; s saves it under that name.
+            let path = path.unwrap_or_else(|| playlist::file_for(&app.playlist_dir, &name));
+            player.load(
+                tracks,
+                Some(player::Named {
+                    name,
+                    path,
+                    saved: 0,
+                }),
+            )?;
             app.queue_sel = 0;
+        }
+        Action::RenamePlaylist(name) => {
+            let path = playlist::file_for(&app.playlist_dir, &name);
+            let renamed = match player.playlist.clone() {
+                // Saved before: its file is renamed too.
+                Some(old) if old.path.exists() && old.path != path => {
+                    playlist::rename(&old.path, &path, &name).map(|()| old.saved)
+                }
+                Some(old) => Ok(old.saved),
+                // A queue without a name yet: it gets one, not saved until s.
+                None => Ok(u64::MAX),
+            };
+            match renamed {
+                Ok(saved) => {
+                    app.status = format!("Renamed to {name}");
+                    player.playlist = Some(player::Named { name, path, saved });
+                }
+                Err(e) => app.status = format!("Couldn't rename it: {e:#}"),
+            }
         }
         Action::Settings { rescan } => {
             app.config.save()?;

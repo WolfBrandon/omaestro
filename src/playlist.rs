@@ -100,6 +100,23 @@ pub fn save(path: &Path, name: &str, tracks: &[Track]) -> Result<()> {
     Ok(())
 }
 
+/// Renames a saved playlist: its file moves to `to` and the name inside changes. The songs
+/// stay as they were saved.
+pub fn rename(from: &Path, to: &Path, name: &str) -> Result<()> {
+    let text =
+        std::fs::read_to_string(from).with_context(|| format!("reading {}", from.display()))?;
+    let mut doc: Value = serde_json::from_str(&text)?;
+    doc["playlist"]["title"] = json!(name);
+    let tmp = to.with_extension("jspf.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&doc)?)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, to)?;
+    if from != to {
+        std::fs::remove_file(from)?;
+    }
+    Ok(())
+}
+
 fn to_jspf(t: &Track) -> Value {
     let mut ids = Vec::new();
     match t.source {
@@ -318,6 +335,20 @@ mod tests {
             Some("/plain/path.flac")
         );
         assert_eq!(path_from_uri("http://x"), None);
+    }
+
+    #[test]
+    fn renaming_moves_the_file_and_changes_the_name_inside() {
+        let tmp = TempDir::new("playlist-rename");
+        let db = sample_library(&tmp.0);
+        let tracks = db.tracks_in("/m/Abba/Gold").unwrap();
+        let (old, new) = (file_for(&tmp.0, "Mix"), file_for(&tmp.0, "Road trip"));
+        save(&old, "Mix", &tracks).unwrap();
+        rename(&old, &new, "Road trip").unwrap();
+        assert!(!old.exists());
+        let (name, loaded) = load(&new, &db).unwrap();
+        assert_eq!(name, "Road trip");
+        assert_eq!(loaded.len(), tracks.len());
     }
 
     #[test]

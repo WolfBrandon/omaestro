@@ -11,25 +11,21 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::cell::Cell;
 
 /// Each section's icon, for its pill (as in the design).
-pub const SECTION_ICONS: [&str; 8] = [
+pub const SECTION_ICONS: [&str; 6] = [
     "\u{f001}",
     "\u{f04b}",
     "\u{f028}",
     "\u{f1e6}",
     "\u{f03d8}",
-    "\u{f0ad}",
-    "\u{f11c}",
     "\u{f05a}",
 ];
 
-pub const SECTIONS: [&str; 8] = [
+pub const SECTIONS: [&str; 6] = [
     "Library",
     "Playback",
     "Outputs",
     "Sources",
     "Appearance",
-    "Behaviour",
-    "Keys",
     "About",
 ];
 
@@ -55,7 +51,6 @@ pub enum Id {
     AlbumArt,
     Visualizer,
     Animation,
-    Minimize,
     Info,
     /// "Designed with OTIS": a link.
     Otis,
@@ -375,31 +370,15 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         )
         .note(note),
     );
-    // Behaviour
-    rows.push(
-        Row::new(
-            5,
-            "Minimize to",
-            Id::Minimize,
-            Value::Text("special:omaestro".into()),
-        )
-        .note("m hides it; the tray brings it back"),
-    );
-    // Keys and About
+    // About
     rows.push(Row::new(
-        6,
-        "All keys",
-        Id::Info,
-        Value::Text("press ? anywhere".into()),
-    ));
-    rows.push(Row::new(
-        7,
+        5,
         "Version",
         Id::Info,
         Value::Text(format!("OMAESTRO v{}", env!("CARGO_PKG_VERSION"))),
     ));
     rows.push(Row::new(
-        7,
+        5,
         "Designed with",
         Id::Otis,
         Value::Text("OTIS".into()),

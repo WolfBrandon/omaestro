@@ -72,11 +72,15 @@ pub enum Action {
     Clear,
     /// Save the queue as a playlist with this name.
     SavePlaylist(String),
-    /// Put a playlist in the queue. `path` is the file for saved ones, none for imported ones.
+    /// Give the queue's playlist a new name (and its file, if it's been saved).
+    RenamePlaylist(String),
+    /// Put a playlist in the queue. `path` is the file for saved ones, none for imported ones;
+    /// `source` is where it came from.
     LoadPlaylist {
         name: String,
         path: Option<PathBuf>,
         tracks: Vec<Track>,
+        source: Source,
     },
     /// The settings changed: save them and apply what the player needs.
     Settings {
@@ -213,7 +217,12 @@ pub enum Overlay {
         sel: usize,
         all: bool,
     },
-    SaveAs(String),
+    /// Editing the playlist's name in the queue's header; saving afterwards when it's for a
+    /// first save.
+    Rename {
+        name: String,
+        then_save: bool,
+    },
     Open(Open),
     /// The Search screen; its state lives in `App::search` so it's kept between visits.
     Search,
@@ -238,7 +247,8 @@ pub enum Target {
     Settings,
     Help,
     Save,
-    SaveAs,
+    /// The playlist's name in the queue's header: click to rename.
+    PlaylistName,
     Open,
     Clear,
     /// A queue row.
@@ -832,19 +842,22 @@ impl App {
         match ctx.playlist {
             Some(p) => Some(Action::SavePlaylist(p.name.clone())),
             None => {
-                self.overlay = Some(Overlay::SaveAs(String::new()));
+                self.overlay = Some(Overlay::Rename {
+                    name: String::new(),
+                    then_save: true,
+                });
                 None
             }
         }
     }
 
-    fn save_as(&mut self, ctx: &Ctx) {
-        if ctx.queue.is_empty() {
-            self.status = "The queue is empty, so there's nothing to save".into();
-            return;
-        }
+    /// Edit the playlist's name, in place in the queue's header.
+    fn rename(&mut self, ctx: &Ctx) {
         let name = ctx.playlist.map(|p| p.name.clone()).unwrap_or_default();
-        self.overlay = Some(Overlay::SaveAs(name));
+        self.overlay = Some(Overlay::Rename {
+            name,
+            then_save: false,
+        });
     }
 
     /// Reads a saved playlist for the queue.
@@ -854,6 +867,7 @@ impl App {
                 name,
                 path: Some(saved.path.clone()),
                 tracks,
+                source: Source::Local,
             }),
             Err(e) => {
                 self.status = format!("Couldn't open {}: {e:#}", saved.name);
@@ -1267,9 +1281,10 @@ impl App {
             } => match result {
                 Ok(tracks) if !tracks.is_empty() => {
                     return Ok(Some(Action::LoadPlaylist {
-                        name: format!("{name} ({})", source.name()),
+                        name,
                         path: None,
                         tracks,
+                        source,
                     }));
                 }
                 Ok(_) => self.status = format!("{name} has no songs OMAESTRO can play"),
@@ -1284,7 +1299,7 @@ impl App {
         let text = text.replace(['\n', '\r'], " ");
         match &mut self.overlay {
             Some(Overlay::Spotify(step)) => step.paste(&text),
-            Some(Overlay::SaveAs(name)) => name.push_str(text.trim()),
+            Some(Overlay::Rename { name, .. }) => name.push_str(text.trim()),
             Some(Overlay::Settings(_)) => {
                 let rows = settings::rows(&self.config, &self.facts());
                 if let Some(Overlay::Settings(s)) = &mut self.overlay {
@@ -1378,7 +1393,7 @@ impl App {
             KeyCode::Char('c') => Some(Action::Clear),
             KeyCode::Char('s') => self.save(ctx),
             KeyCode::Char('S') => {
-                self.save_as(ctx);
+                self.rename(ctx);
                 None
             }
             KeyCode::Char('C') => {
@@ -1449,12 +1464,17 @@ impl App {
                     _ => {}
                 }
             }
-            Overlay::SaveAs(name) => match key.code {
+            Overlay::Rename { name, then_save } => match key.code {
                 KeyCode::Esc => self.overlay = None,
                 KeyCode::Enter if !name.trim().is_empty() => {
                     let name = name.trim().to_string();
+                    let save = *then_save;
                     self.overlay = None;
-                    return Ok(Some(Action::SavePlaylist(name)));
+                    return Ok(Some(if save {
+                        Action::SavePlaylist(name)
+                    } else {
+                        Action::RenamePlaylist(name)
+                    }));
                 }
                 _ => {
                     connect::edit(name, key);
@@ -1628,8 +1648,8 @@ impl App {
                 None
             }
             Target::Save => self.save(ctx),
-            Target::SaveAs => {
-                self.save_as(ctx);
+            Target::PlaylistName => {
+                self.rename(ctx);
                 None
             }
             Target::Open => {
@@ -2054,7 +2074,10 @@ pub mod tests {
             playlist: None,
         };
         assert_eq!(press(&mut app, KeyCode::Char('s'), &ctx), None);
-        assert!(matches!(&app.overlay, Some(Overlay::SaveAs(n)) if n.is_empty()));
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Rename { name, then_save: true }) if name.is_empty()
+        ));
         for c in "Mix".chars() {
             press(&mut app, KeyCode::Char(c), &ctx);
         }
@@ -2072,7 +2095,9 @@ pub mod tests {
             matches!(&app.overlay, Some(Overlay::Open(o)) if o.spotify == Listing::NotConnected)
         );
         match press(&mut app, KeyCode::Enter, &ctx) {
-            Some(Action::LoadPlaylist { name, tracks, path }) => {
+            Some(Action::LoadPlaylist {
+                name, tracks, path, ..
+            }) => {
                 assert_eq!(name, "Mix");
                 assert_eq!(tracks, queue);
                 assert_eq!(path.as_deref(), Some(path_ref(&app, "Mix").as_path()));
@@ -2094,8 +2119,27 @@ pub mod tests {
             press(&mut app, KeyCode::Char('s'), &ctx),
             Some(Action::SavePlaylist("Mix".into()))
         );
+        // S (or clicking the name) renames it in place: Enter renames, it doesn't save.
+        assert_eq!(press(&mut app, KeyCode::Char('S'), &ctx), None);
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Rename { name, then_save: false }) if name == "Mix"
+        ));
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Backspace, &ctx);
+        }
+        for c in "Road trip".chars() {
+            press(&mut app, KeyCode::Char(c), &ctx);
+        }
+        assert_eq!(
+            press(&mut app, KeyCode::Enter, &ctx),
+            Some(Action::RenamePlaylist("Road trip".into()))
+        );
         // Ctrl+Z undoes from anywhere, even with a text box open.
-        app.overlay = Some(Overlay::SaveAs("half typed".into()));
+        app.overlay = Some(Overlay::Rename {
+            name: "half typed".into(),
+            then_save: false,
+        });
         let ctrl_z = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
         assert_eq!(app.on_key(ctrl_z, &ctx).unwrap(), Some(Action::Undo));
     }

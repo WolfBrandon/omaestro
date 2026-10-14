@@ -115,8 +115,9 @@ button. In foot, Ctrl+Shift+O also picks out links on screen.
 | `q` | Quit (the music stops) |
 
 In the queue: `d` removes, `J`/`K` move, `u` or `Ctrl+Z` undoes, `c` clears, `s` saves, `S`
-saves as, `O` opens a playlist (saved ones, or your Spotify and YouTube Music playlists).
-Undo brings back the playlist's name too.
+(or clicking the playlist's name) renames it right there, `O` opens a playlist (saved ones,
+or your Spotify and YouTube Music playlists, which keep their names). Undo brings back the
+playlist's name too. The header's buttons are icons: save, open, clear.
 
 With the mouse, drag a song up or down the queue to move it. Drag the `╎` marks in the
 heading row to make a column wider or narrower; the last text column gives way. Click the
