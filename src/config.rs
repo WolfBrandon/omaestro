@@ -44,6 +44,8 @@ pub struct Appearance {
     pub visualizer: bool,
     /// "omarchy" to follow Omarchy's theme, or an installed theme's folder name.
     pub theme: String,
+    /// What the visualizer shows when there's no sound to read (Spotify on Sonos).
+    pub animation: crate::animation::Kind,
 }
 
 /// How the cover is drawn: as a real picture (sixel or the kitty protocol, in terminals that
@@ -143,6 +145,7 @@ impl Default for Appearance {
             album_art: Art::HiRes,
             visualizer: true,
             theme: crate::theme::FOLLOW.to_string(),
+            animation: crate::animation::Kind::Starfield,
         }
     }
 }

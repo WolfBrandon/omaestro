@@ -758,12 +758,39 @@ fn draw_cover_placeholder(buf: &mut Buffer, r: Rect, t: &Theme) {
     put(buf, r, x, y, I_MUSIC, fg(t.selection));
 }
 
+/// The animation the visualizer shows instead of bars, when there's no sound to read: Spotify
+/// playing on Sonos, which streams it straight from Spotify.
+pub fn fill_in(app: &App, player: &Player) -> Option<crate::animation::Kind> {
+    let kind = app.config.appearance.animation;
+    let st = &player.status;
+    (app.config.appearance.visualizer
+        && kind != crate::animation::Kind::Off
+        && app.bands.is_empty()
+        && !st.idle
+        && !st.paused
+        && matches!(player.output, crate::player::Output::Sonos(_))
+        && player
+            .current()
+            .is_some_and(|t| t.source == crate::library::Source::Spotify))
+    .then_some(kind)
+}
+
 fn draw_visualizer(buf: &mut Buffer, r: Rect, app: &App, player: &Player, t: &Theme) {
     let block = pane("VISUALIZER", t);
     let inner = block.inner(r);
     block.render(r, buf);
     if !app.bands.is_empty() {
         draw_bars(buf, inner, &app.bands, t);
+        return;
+    }
+    if let Some(kind) = fill_in(app, player) {
+        draw_animation(
+            buf,
+            inner,
+            kind,
+            app.animation_clock.elapsed().as_secs_f64(),
+            t,
+        );
         return;
     }
     let note = if !app.config.appearance.visualizer {
@@ -788,6 +815,28 @@ fn draw_visualizer(buf: &mut Buffer, r: Rect, app: &App, player: &Player, t: &Th
         note,
         fg(t.selection),
     );
+}
+
+/// A frame of an animation, its brightness turned into the theme's colours, faint to bright.
+fn draw_animation(
+    buf: &mut Buffer,
+    area: Rect,
+    kind: crate::animation::Kind,
+    secs: f64,
+    t: &Theme,
+) {
+    let ramp = [t.selection, t.dim, t.fg, t.accent, t.light, t.bright];
+    let frame = crate::animation::frame(kind, area.width as usize, area.height as usize, secs);
+    for (y, row) in frame.iter().enumerate() {
+        for (x, cell) in row.iter().enumerate() {
+            if cell.ch == ' ' {
+                continue;
+            }
+            let i = ((cell.level * (ramp.len() - 1) as f32).round() as usize).min(ramp.len() - 1);
+            let at = (area.x + x as u16, area.y + y as u16);
+            put(buf, area, at.0, at.1, &cell.ch.to_string(), fg(ramp[i]));
+        }
+    }
 }
 
 /// Bars drawn with braille dots, as in the design: each bar two dots wide with a one-dot gap,

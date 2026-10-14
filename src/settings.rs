@@ -54,6 +54,7 @@ pub enum Id {
     Theme,
     AlbumArt,
     Visualizer,
+    Animation,
     Minimize,
     Info,
     /// "Designed with OTIS": a link.
@@ -323,7 +324,23 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             Id::Visualizer,
             on_off(config.appearance.visualizer),
         )
-        .note("on Sonos too, except Spotify"),
+        .note("on Sonos too"),
+    );
+    let kinds = crate::animation::Kind::ALL;
+    rows.push(
+        Row::new(
+            4,
+            "Animation",
+            Id::Animation,
+            Value::Choice(
+                kinds.iter().map(|k| k.name()).collect(),
+                kinds
+                    .iter()
+                    .position(|k| *k == config.appearance.animation)
+                    .unwrap_or(0),
+            ),
+        )
+        .note("for Spotify on Sonos"),
     );
     // The theme: Omarchy's, or one installed here (light ones marked ☀).
     let mut options = vec!["Omarchy's theme".to_string()];
@@ -621,6 +638,10 @@ impl Settings {
                 config.appearance.album_art = [Art::LoRes, Art::HiRes, Art::Off][n.min(2)]
             }
             Id::Visualizer => config.appearance.visualizer = on,
+            Id::Animation => {
+                let kinds = crate::animation::Kind::ALL;
+                config.appearance.animation = kinds[n.min(kinds.len() - 1)];
+            }
             Id::ReplayGain => {
                 config.playback.replaygain = ["off", "track", "album"][n.min(2)].to_string()
             }

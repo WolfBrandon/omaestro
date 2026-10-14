@@ -386,6 +386,8 @@ pub struct App {
     pub theme_fixed: bool,
     /// The Omarchy themes installed, for Settings; looked up again when Settings opens.
     pub themes: Vec<crate::theme::Installed>,
+    /// The clock the visualizer's animations run on.
+    pub animation_clock: Instant,
     pub spotify: Option<Arc<Mutex<Spotify>>>,
     spotify_login: Option<spotify::Login>,
     /// The Sonos household once found, and what to say about it in Settings.
@@ -440,6 +442,7 @@ impl App {
             theme: Theme::default(),
             theme_fixed: false,
             themes: crate::theme::installed(),
+            animation_clock: Instant::now(),
             spotify: Spotify::load().map(|s| Arc::new(Mutex::new(s))),
             spotify_login: None,
             sonos: None,

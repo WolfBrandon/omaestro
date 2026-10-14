@@ -18,6 +18,9 @@ designed in OTIS (project "Omaestro").
   bonding commands, and nothing at all to bonded speakers (Office's surrounds, subs, lamps).
 - **Album art**, the **visualizer**, **media keys** and the bar's media widget (MPRIS), a
   **tray icon**, and **minimize** (`m`) into a Hyprland scratchpad.
+- When there's no sound to draw bars from (Spotify on Sonos streams straight to the speaker),
+  the visualizer shows an **animation** instead: a starfield, a plasma or a kaleidoscope, in
+  the theme's colours (Settings → Appearance → Animation).
 - Mouse and keyboard both work everywhere.
 
 Not yet confirmed on the real thing: Spotify playback on this computer (through Soloist),
@@ -155,6 +158,7 @@ volume = 100
 [appearance]
 album_art = "hi-res"                    # "hi-res" (real pictures), "lo-res" (coloured blocks) or "off"
 visualizer = true
+animation = "starfield"                 # for Spotify on Sonos: "plasma", "kaleidoscope" or "off"
 theme = "omarchy"                       # Omarchy's theme, or an installed one: "tokyo-night"
 
 [queue]                                 # the queue's columns (set with the mouse or C)

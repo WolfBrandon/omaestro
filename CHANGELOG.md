@@ -3,6 +3,15 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.7.0 — 2026-10-13
+
+- **Animations for Spotify on Sonos.**
+  - The problem: the speaker streams Spotify itself, so there's no sound here to draw bars
+    from.
+  - The fix: the visualizer now shows a starfield, a plasma or a kaleidoscope instead, in
+    the theme's colours. Pick one in Settings → Appearance → Animation (or Off).
+  - All three are written for OMAESTRO: asciiart.eu's versions reserve their code.
+
 ## 0.6.1 — 2026-10-13
 
 - **Settings shows one section at a time:** the one picked in the pills (or with `Tab`),

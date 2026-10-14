@@ -1,5 +1,6 @@
 //! OMAESTRO: one terminal music player for local files, Spotify, YouTube Music and Sonos.
 
+mod animation;
 mod app;
 mod art;
 mod browse;
@@ -394,6 +395,11 @@ fn event_loop(
         }
         let now = Instant::now();
         let sliding = app.animating(now);
+        // An animation in the visualizer (Spotify on Sonos) wants a new frame each time round.
+        let animated = ui::fill_in(app, player).is_some() && !desktop.minimized;
+        if animated {
+            dirty = true;
+        }
         if dirty || sliding {
             let browse = app.browse_fraction(now);
             terminal.draw(|frame| hits = ui::draw(frame, app, player, browse))?;
@@ -403,7 +409,7 @@ fn event_loop(
         // updates still show promptly.
         let wait = if sliding {
             16
-        } else if vis.is_some() {
+        } else if vis.is_some() || animated {
             33
         } else {
             50
