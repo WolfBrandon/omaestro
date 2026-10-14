@@ -3,6 +3,15 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.6.1 — 2026-10-13
+
+- **Settings shows one section at a time:** the one picked in the pills (or with `Tab`),
+  instead of scrolling down a page of them. `↑` `↓` stay within it. While something is typed in
+  the find box, matches from every section show.
+- Five ideas added to [BACKLOG.md](BACKLOG.md): sort by popularity, track plays (and
+  scrobble), configure the output rate, show each source's connection status, and update
+  without closing and reopening.
+
 ## 0.6.0 — 2026-10-13
 
 - **Settings, redesigned** to the "Settings (new)" OTIS tab, in the style of Search.

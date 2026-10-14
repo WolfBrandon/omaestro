@@ -1682,21 +1682,25 @@ mod tests {
             app.open_settings();
             let (text, hits) = frame(&app, 0.0);
             if (w, h) == (120, 60) {
-                for expected in [
-                    "SETTINGS",
-                    "Find a setting",
-                    "LIBRARY",
-                    "ReplayGain",
-                    " Album ",
-                    "Rescan now",
-                ] {
+                // One section at a time: Library first, nothing from the others.
+                for expected in ["SETTINGS", "Find a setting", "LIBRARY", "Rescan now"] {
                     assert!(text.contains(expected), "missing {expected:?}\n{text}");
                 }
+                assert!(!text.contains("ReplayGain"), "only Library shows\n{text}");
                 assert!(
                     hits.iter()
                         .any(|h| matches!(h.target, Target::SettingsChoice(..)))
                 );
             }
+            key(&mut app, KeyCode::Tab);
+            let (text, _) = frame(&app, 0.0);
+            if (w, h) == (120, 60) {
+                for expected in ["PLAYBACK", "ReplayGain", " Album "] {
+                    assert!(text.contains(expected), "missing {expected:?}\n{text}");
+                }
+                assert!(!text.contains("Rescan now"), "only Playback shows\n{text}");
+            }
+            key(&mut app, KeyCode::BackTab);
             for _ in 0..3 {
                 key(&mut app, KeyCode::Tab);
             }

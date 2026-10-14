@@ -407,8 +407,8 @@ enum PageLine {
 const THEME_W: u16 = 22;
 
 /// The Settings screen, as in the OTIS tab "Settings (new)": a box to find a setting, the
-/// sections as pills, then a box for each section. The theme row lists every theme, the
-/// chosen one ► between arrows ◄.
+/// sections as pills, then the picked section's box (or, while finding, every section with a
+/// match). The theme row lists every theme, the chosen one ► between arrows ◄.
 pub(super) fn draw_settings(
     buf: &mut Buffer,
     screen: Rect,
@@ -490,7 +490,7 @@ pub(super) fn draw_settings(
         x += 1;
     }
 
-    // The page: a box per section with something showing.
+    // The section picked in the pills; or, while finding, every section with a match.
     let bx = inner.x + 2;
     let bw = inner.width.saturating_sub(5);
     let br = bx + bw - 1;
@@ -501,7 +501,7 @@ pub(super) fn draw_settings(
     let mut lines = Vec::new();
     for section in 0..SECTIONS.len() {
         let members: Vec<usize> = (0..rows.len())
-            .filter(|&i| rows[i].section == section && s.shown(&rows[i]))
+            .filter(|&i| rows[i].section == section && s.visible(&rows[i], current))
             .collect();
         if members.is_empty() {
             continue;

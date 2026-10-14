@@ -105,7 +105,7 @@ button. In foot, Ctrl+Shift+O also picks out links on screen.
 | `o` | Where to play: this computer's outputs and the Sonos groups (marked [SONOS]) in one list. `f` stars one, `h` hides one, `H` shows hidden ones |
 | `Ctrl+Z` | Undo the last change to the queue, from anywhere (the status line says what was undone) |
 | `m` | Minimize into the `special:omaestro` scratchpad; the tray icon or a media widget brings it back |
-| `F2` | Settings: a box per section; `Tab` jumps between them, `/` finds a setting by name |
+| `F2` | Settings: one section at a time (click a pill or press `Tab`); `/` finds a setting by name |
 | `r` | Check the music folders for changes |
 | `q` | Quit (the music stops) |
 

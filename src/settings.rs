@@ -1,5 +1,6 @@
-//! The Settings screen (the gear button): one page of rows grouped into sections, as in the
-//! OTIS design's "Settings (new)" tab, with a box to find a setting by name. Changes are saved to `~/.config/omaestro/config.toml` straight
+//! The Settings screen (the gear button), as in the OTIS design's "Settings (new)" tab: one
+//! section at a time, picked from the pills (or Tab), and a box to find a setting by name
+//! across all of them. Changes are saved to `~/.config/omaestro/config.toml` straight
 //! away; the player picks up the ones that affect it (ReplayGain, gapless) at once.
 
 use crate::app::{Action, group_thousands};
@@ -428,9 +429,18 @@ impl Settings {
         }
     }
 
-    /// Whether a row shows, given what's typed in the find box.
+    /// Whether a row matches what's typed in the find box.
     pub fn shown(&self, row: &Row) -> bool {
         row.matches(&self.find)
+    }
+
+    /// Whether a row is on screen: in the current section, or anywhere while finding.
+    pub fn visible(&self, row: &Row, current: usize) -> bool {
+        if self.find.trim().is_empty() {
+            row.section == current
+        } else {
+            self.shown(row)
+        }
     }
 
     /// Pasted text: into the folder being added, or the find box.
@@ -460,9 +470,11 @@ impl Settings {
         rows.get(self.sel).map_or(0, |r| r.section)
     }
 
+    /// ↑↓: the next changeable row on screen (within the section, or among what's found).
     fn move_by(&mut self, rows: &[Row], delta: isize) {
+        let current = self.section(rows);
         let active: Vec<usize> = (0..rows.len())
-            .filter(|&i| rows[i].active() && self.shown(&rows[i]))
+            .filter(|&i| rows[i].active() && self.visible(&rows[i], current))
             .collect();
         let here = active.iter().position(|&i| i == self.sel).unwrap_or(0);
         if let Some(&i) = active.get(step(here, active.len(), delta)) {
@@ -763,6 +775,30 @@ mod tests {
             panic!()
         };
         assert_eq!(chosen, 0);
+    }
+
+    #[test]
+    fn up_and_down_stay_in_the_section_on_screen() {
+        let mut config = Config::default();
+        let rows = rows(&config, &Facts::default());
+        let mut s = Settings::new(&rows);
+        s.go_to_section(&rows, 1);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            seen.push(rows[s.sel].id);
+            s.on_key(KeyEvent::from(KeyCode::Down), &mut config, &rows);
+        }
+        // Playback's changeable rows, stopping at the last one; never into Outputs.
+        assert_eq!(
+            seen,
+            [Id::ReplayGain, Id::Gapless, Id::Gapless, Id::Gapless]
+        );
+        let current = s.section(&rows);
+        assert!(
+            rows.iter()
+                .filter(|r| s.visible(r, current))
+                .all(|r| r.section == 1)
+        );
     }
 
     #[test]
