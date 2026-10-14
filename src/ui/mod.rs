@@ -1355,7 +1355,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("-  +", "Volume down or up"),
         ("o", "Choose where to play (this computer or Sonos)"),
         ("m", "Minimize to the tray (Hyprland)"),
-        ("F2", "Settings (the gear button too)"),
+        ("F2", "Settings (the gear button too; / finds a setting)"),
         ("r", "Check the music folders for changes"),
         ("q", "Quit (the music stops)"),
         ("", ""),
@@ -1670,7 +1670,7 @@ mod tests {
                 ] {
                     assert!(text.contains(expected), "missing {expected:?}\n{text}");
                 }
-                for target in [Target::SearchBox, Target::CloseSearch] {
+                for target in [Target::SearchBox, Target::CloseOverlay] {
                     assert!(hits.iter().any(|h| h.target == target), "no {target:?}");
                 }
                 assert!(
@@ -1682,7 +1682,14 @@ mod tests {
             app.open_settings();
             let (text, hits) = frame(&app, 0.0);
             if (w, h) == (120, 60) {
-                for expected in ["SETTINGS", "LIBRARY", "ReplayGain", "● Album", "Rescan now"] {
+                for expected in [
+                    "SETTINGS",
+                    "Find a setting",
+                    "LIBRARY",
+                    "ReplayGain",
+                    " Album ",
+                    "Rescan now",
+                ] {
                     assert!(text.contains(expected), "missing {expected:?}\n{text}");
                 }
                 assert!(
@@ -1787,6 +1794,16 @@ mod tests {
                 app.on_key(KeyEvent::from(KeyCode::Enter), &ctx).unwrap();
             }
             "settings" => app.open_settings(),
+            // Settings at Appearance, on the theme row.
+            "themes" => {
+                app.open_settings();
+                for _ in 0..4 {
+                    app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
+                }
+                for _ in 0..2 {
+                    app.on_key(KeyEvent::from(KeyCode::Down), &ctx).unwrap();
+                }
+            }
             "spotify" => {
                 app.overlay = Some(crate::app::Overlay::Spotify(
                     crate::connect::SpotifyStep::start(false),

@@ -87,7 +87,7 @@ pub(super) fn draw_search(
     // × closes.
     let close_x = inner.right() - 2;
     put(buf, inner, close_x, inner.y, "×", bold(t.light));
-    hit(Rect::new(close_x - 1, inner.y, 3, 1), Target::CloseSearch);
+    hit(Rect::new(close_x - 1, inner.y, 3, 1), Target::CloseOverlay);
 
     // The search box.
     let search = Rect::new(inner.x + 2, inner.y, 60.min(close_x - inner.x - 4), 3);
@@ -390,6 +390,25 @@ pub(super) fn draw_search(
 
 // ---- Settings ------------------------------------------------------------------------
 
+/// One line of the Settings page: the boxes are drawn a line at a time, so scrolling can cut a
+/// box anywhere and its sides still show.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PageLine {
+    Top(usize),
+    Row(usize),
+    Blank(usize),
+    /// A line of the theme grid: the row it belongs to, and which line.
+    Grid(usize, usize),
+    Bottom(usize),
+    Gap,
+}
+
+/// How wide one theme is in the grid.
+const THEME_W: u16 = 22;
+
+/// The Settings screen, as in the OTIS tab "Settings (new)": a box to find a setting, the
+/// sections as pills, then a box for each section. The theme row lists every theme, the
+/// chosen one ► between arrows ◄.
 pub(super) fn draw_settings(
     buf: &mut Buffer,
     screen: Rect,
@@ -399,160 +418,216 @@ pub(super) fn draw_settings(
     t: &Theme,
     hit: &mut impl FnMut(Rect, Target),
 ) {
-    let r = big_box(screen);
-    let inner = popup(buf, r, "SETTINGS", t, hit);
+    let inner = popup(buf, big_box(screen), "SETTINGS", t, hit);
+    if inner.width < 40 || inner.height < 10 {
+        return;
+    }
     let rows = settings::rows(config, facts);
     let current = s.section(&rows);
 
-    // Sections down the left.
-    let nav_x = inner.x + 1;
-    let nav_w: u16 = 18;
+    // × closes.
+    let close_x = inner.right() - 2;
+    put(buf, inner, close_x, inner.y, "×", bold(t.light));
+    hit(Rect::new(close_x - 1, inner.y, 3, 1), Target::CloseOverlay);
+
+    // The find box.
+    let find = Rect::new(inner.x + 2, inner.y, 60.min(close_x - inner.x - 4), 3);
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(fg(if s.finding { t.light } else { t.fg }))
+        .render(find, buf);
+    hit(find, Target::SettingsFind);
+    let line = Rect::new(find.x + 1, find.y + 1, find.width - 2, 1);
+    let x = put(
+        buf,
+        line,
+        line.x,
+        line.y,
+        &format!("{I_SEARCH}  "),
+        fg(t.fg),
+    );
+    if s.find.is_empty() && !s.finding {
+        let hint = fg(t.dim).add_modifier(Modifier::ITALIC);
+        put(buf, line, x, line.y, "Find a setting", hint);
+    } else {
+        let x = put(buf, line, x, line.y, &s.find, bold(t.bright));
+        if s.finding {
+            put(buf, line, x, line.y, "▏", fg(t.accent));
+        }
+    }
+
+    // The sections as pills. Eight with icons need 96 columns; narrower, the icons go.
+    let y = inner.y + 3;
+    let names: u16 = SECTIONS.iter().map(|n| width(n) + 3).sum();
+    let icons = names + 2 * SECTIONS.len() as u16 <= inner.right().saturating_sub(inner.x + 2);
+    let mut x = inner.x + 2;
     for (i, name) in SECTIONS.iter().enumerate() {
-        let y = inner.y + 1 + i as u16;
-        let area = Rect::new(nav_x, y, nav_w, 1);
-        hit(area, Target::SettingsSection(i));
-        if i == current {
-            fill(buf, area, Style::new().bg(t.selection));
-            put(buf, inner, nav_x + 1, y, name, bold(t.bright));
-        } else {
-            put(buf, inner, nav_x + 1, y, name, fg(t.fg));
-        }
-    }
-    let line_x = nav_x + nav_w + 1;
-    for y in inner.y..inner.bottom().saturating_sub(2) {
-        put(buf, inner, line_x, y, "│", fg(t.selection));
-    }
-
-    // The rows, with a heading at the start of each section.
-    let x0 = line_x + 3;
-    let x1 = inner.right().saturating_sub(2);
-    let label_w: u16 = 18;
-    let mut lines: Vec<(Option<usize>, Option<usize>)> = Vec::new(); // (heading section, row)
-    let mut last = usize::MAX;
-    for (i, row) in rows.iter().enumerate() {
-        if row.section != last {
-            if last != usize::MAX {
-                lines.push((None, None));
-            }
-            lines.push((Some(row.section), None));
-            lines.push((None, None));
-            last = row.section;
-        }
-        lines.push((None, Some(i)));
-    }
-    let view = inner.height.saturating_sub(3) as usize;
-    let sel_line = lines.iter().position(|l| l.1 == Some(s.sel)).unwrap_or(0);
-    let top = scroll(s.top.get(), sel_line, view, lines.len());
-    s.top.set(top);
-    let area = Rect::new(x0 - 1, inner.y + 1, x1 + 2 - x0, view as u16);
-
-    for (n, (heading, row)) in lines.iter().enumerate().skip(top).take(view) {
-        let y = area.y + (n - top) as u16;
-        if let Some(section) = heading {
-            put(
+        let on = i == current;
+        let any = rows.iter().any(|r| r.section == i && s.shown(r));
+        let bg = if on { t.selection } else { t.panel };
+        let start = x;
+        if icons {
+            let color = if on { t.accent } else { t.dim };
+            x = put(
                 buf,
-                area,
-                x0,
+                inner,
+                x,
                 y,
-                &SECTIONS[*section].to_uppercase(),
-                bold(t.dim),
+                &format!(" {}", settings::SECTION_ICONS[i]),
+                fg(color).bg(bg),
             );
+        }
+        let style = match (on, any) {
+            (true, _) => bold(t.bright).bg(bg),
+            (false, true) => fg(t.light),
+            (false, false) => fg(t.dim),
+        };
+        x = put(buf, inner, x, y, &format!(" {name} "), style);
+        hit(
+            Rect::new(start, y, x - start, 1),
+            Target::SettingsSection(i),
+        );
+        x += 1;
+    }
+
+    // The page: a box per section with something showing.
+    let bx = inner.x + 2;
+    let bw = inner.width.saturating_sub(5);
+    let br = bx + bw - 1;
+    let label_x = bx + 3;
+    let value_x = bx + 19;
+    let grid_x = bx + 3;
+    let per = ((br.saturating_sub(grid_x)) / THEME_W).max(1) as usize;
+    let mut lines = Vec::new();
+    for section in 0..SECTIONS.len() {
+        let members: Vec<usize> = (0..rows.len())
+            .filter(|&i| rows[i].section == section && s.shown(&rows[i]))
+            .collect();
+        if members.is_empty() {
             continue;
         }
-        let Some(i) = *row else { continue };
-        let row = &rows[i];
-        let line = Rect::new(area.x, y, area.width, 1);
-        hit(line, Target::SettingsRow(i));
-        let selected = i == s.sel;
-        if selected {
-            fill(buf, line, Style::new().bg(t.selection));
+        if !lines.is_empty() {
+            lines.push(PageLine::Gap);
         }
-        put(
-            buf,
-            area,
-            x0,
-            y,
-            row.label,
-            fg(if selected { t.bright } else { t.fg }),
-        );
-        let mut x = x0 + label_w;
-        match &row.value {
-            Value::Choice(options, chosen) => {
-                for (n, option) in options.iter().enumerate() {
-                    let on = n == *chosen;
-                    let start = x;
-                    x = put(
-                        buf,
-                        area,
-                        x,
-                        y,
-                        if on { "● " } else { "○ " },
-                        fg(if on { t.accent } else { t.dim }),
-                    );
-                    x = put(
-                        buf,
-                        area,
-                        x,
-                        y,
-                        option,
-                        if on { bold(t.bright) } else { fg(t.fg) },
-                    );
+        lines.push(PageLine::Top(section));
+        for (k, &i) in members.iter().enumerate() {
+            if let Value::Pick { options, .. } = &rows[i].value {
+                if k > 0 {
+                    lines.push(PageLine::Blank(section));
+                }
+                lines.push(PageLine::Row(i));
+                lines.push(PageLine::Blank(section));
+                lines.extend((0..options.len().div_ceil(per)).map(|g| PageLine::Grid(i, g)));
+                lines.push(PageLine::Blank(section));
+            } else {
+                lines.push(PageLine::Row(i));
+            }
+        }
+        lines.push(PageLine::Bottom(section));
+    }
+    let top_y = inner.y + 5;
+    let view = inner.bottom().saturating_sub(2 + top_y) as usize;
+    if lines.is_empty() {
+        let note = format!("No setting matches “{}”", s.find);
+        let style = fg(t.dim).add_modifier(Modifier::ITALIC);
+        put(buf, inner, label_x, top_y, &fit(&note, bw), style);
+    }
+    // Keep the selection in view; on the theme row, its grid and the box's end too.
+    let sel_line = lines
+        .iter()
+        .position(|l| *l == PageLine::Row(s.sel))
+        .unwrap_or(0);
+    let has_grid = lines.contains(&PageLine::Grid(s.sel, 0));
+    let box_end = lines[sel_line.min(lines.len().saturating_sub(1))..]
+        .iter()
+        .position(|l| matches!(l, PageLine::Bottom(_)))
+        .map_or(sel_line, |k| sel_line + k);
+    let anchor = if has_grid { box_end } else { sel_line };
+    let top = scroll(s.top.get(), anchor, view, lines.len());
+    let top = scroll(top, sel_line, view, lines.len());
+    s.top.set(top);
+
+    let page = Rect::new(bx, top_y, bw, view as u16);
+    for (n, line) in lines.iter().enumerate().skip(top).take(view) {
+        let y = top_y + (n - top) as u16;
+        let section = match *line {
+            PageLine::Top(sec) | PageLine::Blank(sec) | PageLine::Bottom(sec) => sec,
+            PageLine::Row(i) | PageLine::Grid(i, _) => rows[i].section,
+            PageLine::Gap => continue,
+        };
+        let border = if section == current { t.bright } else { t.fg };
+        match *line {
+            PageLine::Top(sec) => {
+                put(
+                    buf,
+                    page,
+                    bx,
+                    y,
+                    &format!("╭{}╮", "─".repeat(bw as usize - 2)),
+                    fg(border),
+                );
+                let title = if sec == current {
+                    bold(t.bright)
+                } else {
+                    fg(t.light)
+                };
+                put(
+                    buf,
+                    page,
+                    bx + 2,
+                    y,
+                    &format!(" {} ", SECTIONS[sec].to_uppercase()),
+                    title,
+                );
+                continue;
+            }
+            PageLine::Bottom(_) => {
+                put(
+                    buf,
+                    page,
+                    bx,
+                    y,
+                    &format!("╰{}╯", "─".repeat(bw as usize - 2)),
+                    fg(border),
+                );
+                continue;
+            }
+            _ => {
+                put(buf, page, bx, y, "│", fg(border));
+                put(buf, page, br, y, "│", fg(border));
+            }
+        }
+        let inside = Rect::new(bx + 1, y, bw - 2, 1);
+        match *line {
+            PageLine::Row(i) => {
+                draw_settings_row(buf, inside, s, &rows[i], i, label_x, value_x, t, hit)
+            }
+            PageLine::Grid(i, g) => {
+                let Value::Pick {
+                    options, chosen, ..
+                } = &rows[i].value
+                else {
+                    continue;
+                };
+                for c in 0..per {
+                    let n = g * per + c;
+                    let Some(name) = options.get(n) else { break };
+                    let cx = grid_x + c as u16 * THEME_W;
+                    let name = fit(name, THEME_W - 4);
+                    if n == *chosen {
+                        put(buf, inside, cx, y, "►", bold(t.accent));
+                        let end = put(buf, inside, cx + 2, y, &name, bold(t.bright));
+                        put(buf, inside, end + 1, y, "◄", bold(t.accent));
+                    } else {
+                        put(buf, inside, cx + 2, y, &name, fg(t.light));
+                    }
                     hit(
-                        Rect::new(start, y, x - start, 1),
+                        Rect::new(cx, y, THEME_W - 1, 1),
                         Target::SettingsChoice(i, n),
                     );
-                    x += 3;
                 }
             }
-            Value::Number(n) => {
-                x = put(buf, area, x, y, &format!("◂ {n} ▸"), bold(t.bright));
-                x += 2;
-            }
-            // One of many: ◂ and ▸ step through them.
-            Value::Pick {
-                options, chosen, ..
-            } => {
-                let count = options.len().max(1);
-                let back = put(buf, area, x, y, "◂ ", fg(t.accent));
-                hit(
-                    Rect::new(x, y, 2, 1),
-                    Target::SettingsChoice(i, (chosen + count - 1) % count),
-                );
-                let name = options.get(*chosen).map_or("", String::as_str);
-                let after = put(buf, area, back, y, name, bold(t.bright));
-                x = put(buf, area, after, y, " ▸", fg(t.accent));
-                hit(
-                    Rect::new(after, y, 2, 1),
-                    Target::SettingsChoice(i, (chosen + 1) % count),
-                );
-                x += 2;
-            }
-            Value::Text(text) => {
-                if row.id == settings::Id::AddFolder {
-                    if let Some(typed) = &s.adding {
-                        field(
-                            buf,
-                            Rect::new(x, y, x1.saturating_sub(x + 2).min(50), 1),
-                            typed,
-                            true,
-                            t,
-                        );
-                    }
-                } else {
-                    let room = x1.saturating_sub(x + 2 + row.button.map_or(0, |b| width(b) + 4));
-                    x = put(buf, area, x, y, &fit(text, room), fg(t.light));
-                    x += 3;
-                }
-            }
-        }
-        let room = x1.saturating_sub(x + row.button.map_or(0, |b| width(b) + 4));
-        if !row.note.is_empty() && room > 8 {
-            put(buf, area, x, y, &fit(&row.note, room), fg(t.dim));
-        }
-        if let Some(label) = row.button {
-            let bx = x1.saturating_sub(width(label) + 3);
-            let pill_area = pill(buf, area, bx, y, label, t);
-            hit(pill_area, Target::SettingsButton(i));
+            _ => {}
         }
     }
 
@@ -562,16 +637,118 @@ pub(super) fn draw_settings(
             ("⏎", "add"),
             ("Esc", "cancel"),
         ]
+    } else if s.finding {
+        &[
+            ("type", "to find a setting"),
+            ("⏎ ↓", "results"),
+            ("Esc", "clear"),
+        ]
+    } else if !s.find.is_empty() {
+        &[
+            ("↑↓", "move"),
+            ("←→", "change"),
+            ("⏎", "press"),
+            ("/", "find"),
+            ("Esc", "clear"),
+        ]
     } else {
         &[
             ("↑↓", "move"),
             ("←→", "change"),
             ("⏎", "press"),
             ("Tab", "section"),
+            ("/", "find"),
             ("Esc", "close"),
         ]
     };
-    hints(buf, inner, x0, inner.bottom().saturating_sub(1), pairs, t);
+    hints(buf, inner, inner.x + 1, inner.bottom() - 1, pairs, t);
+}
+
+/// One setting inside its section's box: the label, the value (choices as pills), a note, and a
+/// button on the right.
+#[allow(clippy::too_many_arguments)]
+fn draw_settings_row(
+    buf: &mut Buffer,
+    inside: Rect,
+    s: &Settings,
+    row: &settings::Row,
+    i: usize,
+    label_x: u16,
+    value_x: u16,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    let y = inside.y;
+    let right = inside.right().saturating_sub(2);
+    hit(inside, Target::SettingsRow(i));
+    // The selected row sits darker, so a chosen pill on it still shows.
+    let selected = i == s.sel && !s.finding;
+    if selected {
+        fill(buf, inside, Style::new().bg(t.darker));
+        put(buf, inside, label_x - 2, y, "›", bold(t.accent));
+    }
+    let label = if selected {
+        bold(t.bright)
+    } else {
+        fg(t.light)
+    };
+    put(buf, inside, label_x, y, row.label, label);
+    let button_w = row.button.map_or(0, |b| width(b) + 4);
+    let room = |x: u16| right.saturating_sub(x + button_w + 1);
+    let mut x = value_x;
+    match &row.value {
+        Value::Choice(options, chosen) => {
+            for (n, option) in options.iter().enumerate() {
+                let style = if n == *chosen {
+                    bold(t.bright).bg(t.selection)
+                } else {
+                    fg(t.fg)
+                };
+                let start = x;
+                x = put(buf, inside, x, y, &format!(" {option} "), style);
+                hit(
+                    Rect::new(start, y, x - start, 1),
+                    Target::SettingsChoice(i, n),
+                );
+                x += 1;
+            }
+        }
+        Value::Number(n) => {
+            x = put(buf, inside, x, y, &format!("◂ {n} ▸"), bold(t.bright));
+        }
+        Value::Pick {
+            options, chosen, ..
+        } => {
+            x = put(buf, inside, x, y, "● ", fg(t.accent));
+            let name = options.get(*chosen).map_or("", String::as_str);
+            x = put(buf, inside, x, y, name, bold(t.bright));
+        }
+        Value::Text(text) => {
+            if row.id == settings::Id::AddFolder {
+                if let Some(typed) = &s.adding {
+                    field(buf, Rect::new(x, y, room(x).min(50), 1), typed, true, t);
+                }
+            } else if row.id == settings::Id::Otis {
+                let style = bold(t.accent).add_modifier(Modifier::UNDERLINED);
+                let end = put(buf, inside, x, y, text, style);
+                hit(
+                    Rect::new(x, y, end - x, 1),
+                    Target::Link(crate::connect::Link::Otis),
+                );
+                x = end;
+            } else {
+                x = put(buf, inside, x, y, &fit(text, room(x)), fg(t.fg));
+            }
+        }
+    }
+    if !row.note.is_empty() && room(x + 2) > 8 {
+        let style = fg(t.dim).add_modifier(Modifier::ITALIC);
+        put(buf, inside, x + 2, y, &fit(&row.note, room(x + 2)), style);
+    }
+    if let Some(label) = row.button {
+        let area = pill(buf, inside, right + 1 - button_w, y, label, t);
+        hit(area, Target::SettingsButton(i));
+    }
 }
 
 // ---- signing in ------------------------------------------------------------------------

@@ -260,8 +260,10 @@ pub enum Target {
     OpenTab(Source),
     /// The Search screen's box, source chips and result rows.
     SearchBox,
-    /// The × at the top right of Search.
-    CloseSearch,
+    /// The × at the top right of Search and Settings.
+    CloseOverlay,
+    /// The find box at the top of Settings.
+    SettingsFind,
     SearchChip(Source),
     SearchRow(usize),
     /// Settings: a section in the list on the left, a row, one of a row's choices, a button.
@@ -295,7 +297,8 @@ impl Target {
                 | Target::Playlist(_)
                 | Target::OpenTab(_)
                 | Target::SearchBox
-                | Target::CloseSearch
+                | Target::CloseOverlay
+                | Target::SettingsFind
                 | Target::SearchChip(_)
                 | Target::SearchRow(_)
                 | Target::SettingsSection(_)
@@ -1279,9 +1282,10 @@ impl App {
         match &mut self.overlay {
             Some(Overlay::Spotify(step)) => step.paste(&text),
             Some(Overlay::SaveAs(name)) => name.push_str(text.trim()),
-            Some(Overlay::Settings(s)) => {
-                if let Some(folder) = &mut s.adding {
-                    folder.push_str(text.trim());
+            Some(Overlay::Settings(_)) => {
+                let rows = settings::rows(&self.config, &self.facts());
+                if let Some(Overlay::Settings(s)) = &mut self.overlay {
+                    s.paste(text.trim(), &rows);
                 }
             }
             Some(Overlay::Search) => {
@@ -1693,8 +1697,14 @@ impl App {
                 self.search.typing = true;
                 None
             }
-            Target::CloseSearch => {
+            Target::CloseOverlay => {
                 self.overlay = None;
+                None
+            }
+            Target::SettingsFind => {
+                if let Some(Overlay::Settings(s)) = &mut self.overlay {
+                    s.finding = true;
+                }
                 None
             }
             Target::SearchChip(source) => {
@@ -2393,10 +2403,46 @@ pub mod tests {
         assert!(matches!(app.overlay, Some(Overlay::Search)));
         let hits = [Hit {
             area: Rect::new(100, 10, 3, 1),
-            target: Target::CloseSearch,
+            target: Target::CloseOverlay,
         }];
         click(&mut app, 101, 10, &hits, &ctx);
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn clicking_a_theme_in_the_grid_picks_it() {
+        let tmp = TempDir::new("app-theme-click");
+        let mut app = app(&tmp);
+        app.themes = vec![crate::theme::Installed {
+            slug: "tokyo-night".into(),
+            name: "Tokyo Night".into(),
+            light: false,
+            path: std::path::PathBuf::new(),
+        }];
+        let ctx = Ctx {
+            queue: &[],
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+        };
+        app.overlay = Some(Overlay::Settings(Settings::new(&settings::rows(
+            &app.config,
+            &app.facts(),
+        ))));
+        let rows = settings::rows(&app.config, &app.facts());
+        let theme_row = rows
+            .iter()
+            .position(|r| r.id == settings::Id::Theme)
+            .unwrap();
+        let hits = [Hit {
+            area: Rect::new(40, 20, 21, 1),
+            target: Target::SettingsChoice(theme_row, 1),
+        }];
+        assert_eq!(
+            click(&mut app, 45, 20, &hits, &ctx),
+            Some(Action::Settings { rescan: false })
+        );
+        assert_eq!(app.config.appearance.theme, "tokyo-night");
     }
 
     #[test]

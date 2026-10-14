@@ -1,5 +1,5 @@
 //! The Settings screen (the gear button): one page of rows grouped into sections, as in the
-//! OTIS design's Settings tab. Changes are saved to `~/.config/omaestro/config.toml` straight
+//! OTIS design's "Settings (new)" tab, with a box to find a setting by name. Changes are saved to `~/.config/omaestro/config.toml` straight
 //! away; the player picks up the ones that affect it (ReplayGain, gapless) at once.
 
 use crate::app::{Action, group_thousands};
@@ -8,6 +8,18 @@ use crate::config::{Art, Config};
 use crate::library::Source;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::cell::Cell;
+
+/// Each section's icon, for its pill (as in the design).
+pub const SECTION_ICONS: [&str; 8] = [
+    "\u{f001}",
+    "\u{f04b}",
+    "\u{f028}",
+    "\u{f1e6}",
+    "\u{f03d8}",
+    "\u{f0ad}",
+    "\u{f11c}",
+    "\u{f05a}",
+];
 
 pub const SECTIONS: [&str; 8] = [
     "Library",
@@ -43,6 +55,8 @@ pub enum Id {
     Visualizer,
     Minimize,
     Info,
+    /// "Designed with OTIS": a link.
+    Otis,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +107,28 @@ impl Row {
     fn button(mut self, label: &'static str) -> Row {
         self.button = Some(label);
         self
+    }
+
+    /// Whether the row matches what's typed in the find box (any of its words, its section,
+    /// its note or its options, ignoring case).
+    pub fn matches(&self, find: &str) -> bool {
+        let find = find.trim().to_lowercase();
+        if find.is_empty() {
+            return true;
+        }
+        let mut words = vec![
+            self.label.to_string(),
+            SECTIONS[self.section].to_string(),
+            self.note.clone(),
+        ];
+        match &self.value {
+            Value::Choice(options, _) => words.extend(options.iter().map(|o| o.to_string())),
+            Value::Pick { options, .. } => words.extend(options.iter().cloned()),
+            Value::Text(text) => words.push(text.clone()),
+            Value::Number(_) => {}
+        }
+        words.extend(self.button.map(str::to_string));
+        words.iter().any(|w| w.to_lowercase().contains(&find))
     }
 
     /// Rows that can be changed or have a button.
@@ -266,37 +302,6 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         .button("Connect"),
     });
     // Appearance
-    let follow = match &facts.omarchy_theme {
-        Some(name) => format!("Omarchy's theme ({name})"),
-        None => "Omarchy's theme".to_string(),
-    };
-    let mut options = vec![follow];
-    let mut values = vec![crate::theme::FOLLOW.to_string()];
-    for theme in &facts.themes {
-        options.push(if theme.light {
-            format!("{} (light)", theme.name)
-        } else {
-            theme.name.clone()
-        });
-        values.push(theme.slug.clone());
-    }
-    let chosen = values
-        .iter()
-        .position(|v| *v == config.appearance.theme)
-        .unwrap_or(0);
-    rows.push(
-        Row::new(
-            4,
-            "Theme",
-            Id::Theme,
-            Value::Pick {
-                options,
-                values,
-                chosen,
-            },
-        )
-        .note("←→ to try others"),
-    );
     rows.push(Row::new(
         4,
         "Album art",
@@ -318,6 +323,39 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
             on_off(config.appearance.visualizer),
         )
         .note("on Sonos too, except Spotify"),
+    );
+    // The theme: Omarchy's, or one installed here (light ones marked ☀).
+    let mut options = vec!["Omarchy's theme".to_string()];
+    let mut values = vec![crate::theme::FOLLOW.to_string()];
+    for theme in &facts.themes {
+        options.push(if theme.light {
+            format!("{} \u{f185}", theme.name)
+        } else {
+            theme.name.clone()
+        });
+        values.push(theme.slug.clone());
+    }
+    let chosen = values
+        .iter()
+        .position(|v| *v == config.appearance.theme)
+        .unwrap_or(0);
+    let note = match (&facts.omarchy_theme, chosen) {
+        (Some(name), 0) => format!("· {name} now, and it follows Omarchy"),
+        (None, 0) => "· follows Omarchy".to_string(),
+        _ => "←→ to try others".to_string(),
+    };
+    rows.push(
+        Row::new(
+            4,
+            "Theme",
+            Id::Theme,
+            Value::Pick {
+                options,
+                values,
+                chosen,
+            },
+        )
+        .note(note),
     );
     // Behaviour
     rows.push(
@@ -345,8 +383,8 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     rows.push(Row::new(
         7,
         "Designed with",
-        Id::Info,
-        Value::Text("OTIS · github.com/WolfBrandon/otis".into()),
+        Id::Otis,
+        Value::Text("OTIS".into()),
     ));
     rows
 }
@@ -373,6 +411,10 @@ pub struct Settings {
     pub top: Cell<usize>,
     /// Typing a new folder: the text so far.
     pub adding: Option<String>,
+    /// What's typed in the find box; only matching rows show.
+    pub find: String,
+    /// Typing in the find box.
+    pub finding: bool,
 }
 
 impl Settings {
@@ -381,6 +423,36 @@ impl Settings {
             sel: rows.iter().position(Row::active).unwrap_or(0),
             top: Cell::new(0),
             adding: None,
+            find: String::new(),
+            finding: false,
+        }
+    }
+
+    /// Whether a row shows, given what's typed in the find box.
+    pub fn shown(&self, row: &Row) -> bool {
+        row.matches(&self.find)
+    }
+
+    /// Pasted text: into the folder being added, or the find box.
+    pub fn paste(&mut self, text: &str, rows: &[Row]) {
+        if let Some(folder) = &mut self.adding {
+            folder.push_str(text);
+        } else if self.finding {
+            self.find.push_str(text);
+            self.settle(rows);
+        }
+    }
+
+    /// After the find box changes: keep the selection on a row that still shows.
+    fn settle(&mut self, rows: &[Row]) {
+        if rows
+            .get(self.sel)
+            .is_some_and(|r| r.active() && self.shown(r))
+        {
+            return;
+        }
+        if let Some(i) = rows.iter().position(|r| r.active() && self.shown(r)) {
+            self.sel = i;
         }
     }
 
@@ -389,18 +461,24 @@ impl Settings {
     }
 
     fn move_by(&mut self, rows: &[Row], delta: isize) {
-        let active: Vec<usize> = (0..rows.len()).filter(|&i| rows[i].active()).collect();
+        let active: Vec<usize> = (0..rows.len())
+            .filter(|&i| rows[i].active() && self.shown(&rows[i]))
+            .collect();
         let here = active.iter().position(|&i| i == self.sel).unwrap_or(0);
         if let Some(&i) = active.get(step(here, active.len(), delta)) {
             self.sel = i;
         }
     }
 
-    /// Jumps to a section's first changeable row (or its first row).
+    /// Jumps to a section's first changeable row (or its first row). With something in the
+    /// find box, a section with nothing matching clears the box first.
     pub fn go_to_section(&mut self, rows: &[Row], section: usize) {
+        if !rows.iter().any(|r| r.section == section && self.shown(r)) {
+            self.find.clear();
+        }
         if let Some(i) = rows
             .iter()
-            .position(|r| r.section == section && r.active())
+            .position(|r| r.section == section && r.active() && self.shown(r))
             .or_else(|| rows.iter().position(|r| r.section == section))
         {
             self.sel = i;
@@ -427,19 +505,57 @@ impl Settings {
             }
             return Outcome::Stay;
         }
+        // Typing in the find box: only matching settings show.
+        if self.finding {
+            match key.code {
+                KeyCode::Esc => {
+                    self.find.clear();
+                    self.finding = false;
+                }
+                KeyCode::Enter | KeyCode::Down | KeyCode::Tab => self.finding = false,
+                KeyCode::Backspace => {
+                    self.find.pop();
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.find.clear()
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.find.push(c)
+                }
+                _ => {}
+            }
+            self.settle(rows);
+            return Outcome::Stay;
+        }
         if let Some(delta) = movement(key.code) {
             self.move_by(rows, delta);
             return Outcome::Stay;
         }
         match key.code {
+            KeyCode::Char('/') => {
+                self.finding = true;
+                Outcome::Stay
+            }
+            // Esc first clears a search, then closes.
+            KeyCode::Esc if !self.find.is_empty() => {
+                self.find.clear();
+                Outcome::Stay
+            }
             KeyCode::Esc | KeyCode::Char('q') => Outcome::Close,
             KeyCode::Tab | KeyCode::BackTab => {
+                // The next section with something showing.
                 let here = self.section(rows);
-                let next = if key.code == KeyCode::Tab {
-                    (here + 1) % SECTIONS.len()
-                } else {
-                    (here + SECTIONS.len() - 1) % SECTIONS.len()
-                };
+                let n = SECTIONS.len();
+                let next = (1..=n)
+                    .map(|k| {
+                        if key.code == KeyCode::Tab {
+                            (here + k) % n
+                        } else {
+                            (here + n - k) % n
+                        }
+                    })
+                    .find(|&sec| rows.iter().any(|r| r.section == sec && self.shown(r)))
+                    .unwrap_or(here);
                 self.go_to_section(rows, next);
                 Outcome::Stay
             }
@@ -619,12 +735,13 @@ mod tests {
         assert_eq!(
             options,
             [
-                "Omarchy's theme (Phosphor Wolf)",
-                "Catppuccin Latte (light)",
+                "Omarchy's theme",
+                "Catppuccin Latte \u{f185}",
                 "Tokyo Night"
             ]
         );
         assert_eq!(chosen, 0, "follows Omarchy unless told otherwise");
+        assert!(row(&config).note.contains("Phosphor Wolf now"));
 
         // → tries the next theme, saving it; ← from the first goes round to the last.
         s.sel = rows(&config, &facts)
@@ -646,5 +763,52 @@ mod tests {
             panic!()
         };
         assert_eq!(chosen, 0);
+    }
+
+    #[test]
+    fn the_find_box_shows_only_matching_settings() {
+        let mut config = Config::default();
+        let facts = Facts::default();
+        let rows = rows(&config, &facts);
+        let mut s = Settings::new(&rows);
+        let key = |s: &mut Settings, config: &mut Config, code| {
+            s.on_key(KeyEvent::from(code), config, &rows)
+        };
+        key(&mut s, &mut config, KeyCode::Char('/'));
+        assert!(s.finding);
+        for c in "gapless".chars() {
+            key(&mut s, &mut config, KeyCode::Char(c));
+        }
+        let shown: Vec<Id> = rows.iter().filter(|r| s.shown(r)).map(|r| r.id).collect();
+        assert_eq!(shown, [Id::Gapless]);
+        assert_eq!(
+            rows[s.sel].id,
+            Id::Gapless,
+            "the selection moves to what matches"
+        );
+
+        // Enter goes to the results; ←→ change them; Esc clears, then a second Esc closes.
+        key(&mut s, &mut config, KeyCode::Enter);
+        assert!(!s.finding);
+        assert_eq!(key(&mut s, &mut config, KeyCode::Right), Outcome::Saved);
+        assert!(!config.playback.gapless);
+        assert_eq!(key(&mut s, &mut config, KeyCode::Esc), Outcome::Stay);
+        assert!(s.find.is_empty());
+        assert_eq!(key(&mut s, &mut config, KeyCode::Esc), Outcome::Close);
+
+        // Words in options and sections count too; q types while finding.
+        key(&mut s, &mut config, KeyCode::Char('/'));
+        for c in "hi-res".chars() {
+            key(&mut s, &mut config, KeyCode::Char(c));
+        }
+        assert!(
+            rows.iter()
+                .filter(|r| s.shown(r))
+                .all(|r| r.id == Id::AlbumArt)
+        );
+        key(&mut s, &mut config, KeyCode::Esc);
+        key(&mut s, &mut config, KeyCode::Char('/'));
+        assert_eq!(key(&mut s, &mut config, KeyCode::Char('q')), Outcome::Stay);
+        assert_eq!(s.find, "q");
     }
 }

@@ -3,6 +3,18 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.6.0 — 2026-10-13
+
+- **Settings, redesigned** to the "Settings (new)" OTIS tab, in the style of Search.
+  - **Find a setting** (`/` or click the box): only matching settings show, by name, section,
+    option or note. Esc clears the search, then closes.
+  - The sections are pills with icons; clicking one jumps there, and `Tab` steps through them.
+  - Each section is a box, the one you're in with a brighter border.
+  - Choices are pills; the selected row sits on a darker bar with a ›.
+  - × closes Settings. "OTIS" under About is a link.
+- **Theme list.** Appearance lists every installed theme, the chosen one ► between
+  arrows ◄; click one to pick it. Light themes are marked ☀.
+
 ## 0.5.0 — 2026-10-13
 
 - **Themes.** Settings → Appearance → Theme picks any Omarchy theme installed here (Omarchy's

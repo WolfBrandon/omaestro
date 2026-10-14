@@ -105,7 +105,7 @@ button. In foot, Ctrl+Shift+O also picks out links on screen.
 | `o` | Where to play: this computer's outputs and the Sonos groups (marked [SONOS]) in one list. `f` stars one, `h` hides one, `H` shows hidden ones |
 | `Ctrl+Z` | Undo the last change to the queue, from anywhere (the status line says what was undone) |
 | `m` | Minimize into the `special:omaestro` scratchpad; the tray icon or a media widget brings it back |
-| `F2` | Settings |
+| `F2` | Settings: a box per section; `Tab` jumps between them, `/` finds a setting by name |
 | `r` | Check the music folders for changes |
 | `q` | Quit (the music stops) |
 
@@ -130,8 +130,9 @@ next one. `Enter` plays a song right away (the queue carries on after it), `a` a
 adds everything that provider found. `Esc` or the × closes Search.
 
 Colours come from Omarchy's current theme and follow theme switches while the player is open.
-Or pick any installed Omarchy theme for OMAESTRO alone: Settings (`F2`) → Appearance → Theme,
-then `←` `→` (or click ◂ ▸) to try them; each one shows straight away and is saved. A picked
+Or pick any installed Omarchy theme for OMAESTRO alone: Settings (`F2`) → Appearance → Theme
+lists them all, the chosen one ► between arrows ◄. `←` `→` on the Theme row try them in turn,
+or click one; each shows straight away and is saved. A picked
 theme paints its own background, so light ones work in a dark terminal. Everforest and White
 have very faint dim text (headings, times), as they do everywhere.
 
