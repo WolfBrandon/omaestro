@@ -66,8 +66,11 @@ pub struct Visualizer {
 }
 
 fn spawn_pw_record(target: &Target) -> io::Result<Child> {
-    // node.dont-fallback: if the target is missing, fail instead of falling back
-    //   to the default SOURCE (= your microphone!).
+    // node.dont-fallback: if a stream target is missing, fail instead of falling back
+    //   to the default SOURCE (= your microphone!). Not for an output's sound
+    //   (stream.capture.sink): that falls back to the default output, never a microphone
+    //   (checked 2026-10-13), and with it PipeWire 1.6 can't find a busy output by name
+    //   ("defined target not found"), so the capture died at once, over and over.
     // node.passive: don't keep an idle sink awake; no data flows while nothing plays.
     // node.name: must differ from mpv's "omaestro" so a Stream target can't match us.
     let (props, name) = match target {
@@ -76,12 +79,12 @@ fn spawn_pw_record(target: &Target) -> io::Result<Child> {
             None,
         ),
         Target::Sink(n) => (
-            "{ stream.capture.sink=true node.dont-fallback=true node.passive=true node.name=omaestro-vis }",
-            Some(n),
+            "{ stream.capture.sink=true node.passive=true node.name=omaestro-vis }",
+            Some(n.clone()),
         ),
         Target::Stream(n) => (
             "{ node.dont-fallback=true node.passive=true node.name=omaestro-vis }",
-            Some(n),
+            Some(n.clone()),
         ),
         Target::File(_) => return Err(io::Error::other("a file isn't captured")),
     };
@@ -97,7 +100,7 @@ fn spawn_pw_record(target: &Target) -> io::Result<Child> {
     ]);
     cmd.args(["--latency", "20ms", "-P", props]);
     if let Some(n) = name {
-        cmd.args(["--target", n]);
+        cmd.args(["--target", &n]);
     }
     cmd.arg("-")
         .stdin(Stdio::null())
@@ -282,6 +285,21 @@ mod tests {
     use super::*;
     use crate::testutil::{TempDir, have};
     use std::time::Duration;
+
+    /// Listens (only) to a real output while something plays on it, e.g.
+    /// `OMAESTRO_SINK=alsa_output.usb-… cargo test live_sink -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a real output with music playing on it"]
+    fn live_sink_capture_stays_up() {
+        let Ok(sink) = std::env::var("OMAESTRO_SINK") else {
+            return;
+        };
+        let v = Visualizer::start(Target::Sink(sink), 32, 0.0).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+        let loudest = v.bands().into_iter().fold(0.0f32, f32::max);
+        println!("alive: {}, loudest band: {loudest:.2}", v.is_alive());
+        assert!(v.is_alive(), "the capture stays up");
+    }
 
     /// A 1 kHz tone decoded silently from a file lights up the band around 1 kHz most.
     #[test]

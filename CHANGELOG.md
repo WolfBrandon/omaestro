@@ -3,6 +3,19 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.7.3 — 2026-10-13
+
+- **Fix: the visualizer for Spotify played here, and likely the popping.**
+  - The problem: for Spotify on this computer, the visualizer listens to the whole output (the
+    G560). It asked PipeWire never to fall back to another device, and with that, PipeWire
+    1.6 can't find a busy output by name ("defined target not found"). So each capture died
+    at once, and OMAESTRO started a new one twice a second. The bars flickered, and the
+    constant rewiring of the G560 is the likely cause of the pops.
+  - The fix: output captures no longer ask that. An output capture falls back to the default
+    output, never the microphone (checked).
+  - A capture that keeps dying is now tried less and less often (½, 1, 2, 4, then 8 s apart)
+    instead of twice a second.
+
 ## 0.7.2 — 2026-10-13
 
 - **Fix: Spotify songs on this computer skipped without playing.**

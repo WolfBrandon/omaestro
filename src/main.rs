@@ -329,6 +329,11 @@ fn event_loop(
     // The visualizer's capture, which target it listens to, and when it last tried to start.
     let mut vis: Option<(String, visualizer::Visualizer)> = None;
     let mut vis_tried = Instant::now() - Duration::from_secs(1);
+    // A capture that keeps dying straight away is tried less and less often (each try makes
+    // PipeWire rewire the output, which can click): what it listened to, and how many times
+    // in a row it died young.
+    let mut vis_last_key = String::new();
+    let mut vis_fails: u32 = 0;
     // For a silent copy (Sonos): where in the song it started and when, to keep it in step.
     let mut vis_clock: Option<(f64, Instant)> = None;
     loop {
@@ -362,6 +367,7 @@ fn event_loop(
         match want {
             None => {
                 vis = None;
+                vis_last_key.clear();
                 if !app.bands.is_empty() {
                     app.bands.clear();
                     dirty = true;
@@ -379,7 +385,17 @@ fn event_loop(
                     Some((k, v)) => *k != key || !v.is_alive() || drifted,
                     None => true,
                 };
-                if stale && vis_tried.elapsed() > Duration::from_millis(500) {
+                let fresh = vis_last_key != key;
+                let backoff = if fresh {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_millis(500) * (1 << vis_fails.min(4))
+                };
+                if stale && vis_tried.elapsed() > backoff {
+                    let died_young =
+                        !fresh && vis_tried.elapsed() < backoff + Duration::from_secs(3);
+                    vis_fails = if died_young { vis_fails + 1 } else { 0 };
+                    vis_last_key = key.clone();
                     vis_tried = Instant::now();
                     let start = player.status.position;
                     vis = visualizer::Visualizer::start(target, 32, start)
