@@ -13,6 +13,7 @@ mod player;
 mod playlist;
 mod search;
 mod secrets;
+mod session;
 mod settings;
 mod sonos;
 mod spotify;
@@ -104,7 +105,14 @@ fn run_player() -> Result<()> {
     let mut player = Player::start(&options, &config::runtime_dir().join("mpv.sock"), mpv_tx)?;
     let (news_tx, news_rx) = mpsc::channel();
     let scan_on_launch = config.scan_on_launch;
-    let mut app = App::new(open_db()?, config, news_tx)?;
+    // The queue from last time, read before the library index goes to the app.
+    let db = open_db()?;
+    let last = session::load(&config::data_dir(), &db);
+    let mut app = App::new(db, config, news_tx)?;
+    if let Some(last) = last {
+        app.queue_sel = last.current.unwrap_or(0);
+        player.restore(last.tracks, last.current, last.playlist, last.position);
+    }
 
     // Open straight from the saved index, and check the folders for changes meanwhile.
     let (scan_tx, scan_rx) = mpsc::channel();
@@ -175,8 +183,9 @@ fn run_player() -> Result<()> {
     );
     ratatui::restore();
     // Quitting stops the music, wherever it plays; this computer's volume is kept for next
-    // time (not a Sonos speaker's).
+    // time (not a Sonos speaker's), and so is the queue, with the place in the song.
     app.config.playback.volume = player.here_volume().round() as u8;
+    let _ = session::save(&config::data_dir(), &player.session());
     let _ = app.config.save();
     player.shut_down();
     result
@@ -319,6 +328,8 @@ fn event_loop(
     desktop: &mut Desktop,
 ) -> Result<()> {
     let mut dirty = true;
+    // The queue is kept for next time whenever it or the song it's on changes.
+    let mut kept = (player.revision, player.current_index());
     let mut theme_setting = app.config.appearance.theme.clone();
     let mut theme_file = ThemeFile::for_setting(&theme_setting);
     let mut theme_checked = Instant::now() - Duration::from_secs(60);
@@ -336,6 +347,10 @@ fn event_loop(
     // For a silent copy (Sonos): where in the song it started and when, to keep it in step.
     let mut vis_clock: Option<(f64, Instant)> = None;
     loop {
+        if (player.revision, player.current_index()) != kept {
+            kept = (player.revision, player.current_index());
+            let _ = session::save(&config::data_dir(), &player.session());
+        }
         // A theme picked in Settings applies at once.
         if app.config.appearance.theme != theme_setting {
             theme_setting = app.config.appearance.theme.clone();

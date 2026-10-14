@@ -3,6 +3,25 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.8.0 — 2026-10-13
+
+- **The queue comes back when you reopen OMAESTRO.**
+  - What returns: the songs (Spotify and YouTube Music ones too), the playlist's name and
+    whether it was saved, the song it was on, and how far in.
+  - Nothing plays until you press Space, which carries on from there. Any other song starts
+    at its beginning.
+  - It's kept whenever the queue or the song changes, so a crash loses at most the place in
+    the song.
+- **Fix: switching a Spotify song from Sonos back to this computer.**
+  - The problem: it jumped back to where it had paused, looped a few seconds and skipped to
+    the next song.
+  - Cause 1: the same song again counted as "the previous song", so all of Soloist's news
+    about it was ignored. OMAESTRO thought it never started, asked again every few seconds,
+    and gave up.
+  - Cause 2: the seek to where Sonos was went out with "play" and was lost while the song
+    loaded.
+  - The fix: the same song's news now counts, and the seek waits until Soloist is playing.
+
 ## 0.7.4 — 2026-10-13
 
 - **Fix: no sound after switching from Sonos back to this computer.**

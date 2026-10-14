@@ -21,6 +21,8 @@ designed in OTIS (project "Omaestro").
 - When there's no sound to draw bars from (Spotify on Sonos streams straight to the speaker),
   the visualizer shows an **animation** instead: a starfield, a plasma or a kaleidoscope, in
   the theme's colours (Settings → Appearance → Animation).
+- The queue comes back when you reopen OMAESTRO: the songs, the playlist's name, the song it
+  was on and how far in. Nothing plays until you press Space, which carries on from there.
 - Mouse and keyboard both work everywhere.
 
 Not yet confirmed on the real thing: Spotify playback on this computer (through Soloist),
@@ -188,6 +190,8 @@ changed in each one is in [CHANGELOG.md](CHANGELOG.md); ideas for later are in
 - `~/.cache/omaestro/library.db`: the library index. Safe to delete; the next start rebuilds
   it, which takes about a minute.
 - `~/.local/share/omaestro/playlists/*.jspf`: your playlists (JSPF, a standard format).
+- `~/.local/share/omaestro/last-queue.jspf` and `last-queue.json`: the queue as you left it, and
+  where you were in it. Kept as it changes, so it survives a crash too.
 - `~/.config/omaestro/spotify.json`, `soloist.json`, `youtube.json`, `ytm-cookies.txt`: sign-ins,
   readable only by you. Deleting one signs out.
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, downloaded by OMAESTRO.

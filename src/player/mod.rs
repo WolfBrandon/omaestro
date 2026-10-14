@@ -151,9 +151,15 @@ pub struct Player {
     soloist_started: bool,
     /// When Soloist was last asked to play our song, and how many times, while it hasn't.
     soloist_asked: Option<(Instant, u8)>,
+    /// Where to seek once Soloist is playing our song (coming back from Sonos mid-song). Sent
+    /// with "play", a seek is lost while the song loads.
+    soloist_seek: Option<f64>,
     /// The volume on this computer's outputs. While playing on Sonos, the volume shown is the
     /// speaker's own; coming back, this one returns.
     here_volume: f64,
+    /// The song restored from last time and how far into it: playing that song carries on
+    /// from there (any other starts at the beginning).
+    restored: Option<(usize, f64)>,
     sonos: Option<sonos::SonosPlayer>,
     household: Option<Arc<sonos_api::Sonos>>,
     media_port: u16,
@@ -195,7 +201,9 @@ impl Player {
             soloist_held: false,
             soloist_started: false,
             soloist_asked: None,
+            soloist_seek: None,
             here_volume: options.volume as f64,
+            restored: None,
             sonos: None,
             household: None,
             media_port: 47100,
@@ -447,6 +455,10 @@ impl Player {
             return Ok(());
         };
         let start = std::mem::take(&mut self.start_at);
+        let start = match self.restored.take() {
+            Some((i, at)) if i == index && start == 0.0 => at,
+            _ => start,
+        };
         self.ticket += 1;
         let ticket = self.ticket;
         self.current = Some(index);
@@ -500,20 +512,27 @@ impl Player {
                 let device = node_name(device);
                 self.hand_over(Engine::Soloist)?;
                 self.ensure_soloist(&device)?;
+                if self.soloist.is_some() {
+                    self.ask_soloist(&track.uri, start);
+                }
                 if let Some(s) = &self.soloist {
-                    self.soloist_previous = self.soloist_uri.replace(track.uri.clone());
-                    self.soloist_held = false;
-                    self.soloist_started = false;
-                    self.soloist_asked = Some((Instant::now(), 1));
                     s.set_volume(self.status.volume.round() as u8);
                     s.play(&track.uri);
-                    if start > 1.0 {
-                        s.seek(start);
-                    }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Notes that Soloist is being asked to play `uri` from `start` seconds.
+    fn ask_soloist(&mut self, uri: &str, start: f64) {
+        let previous = self.soloist_uri.replace(uri.to_string());
+        // The same song again (back from Sonos): its news is wanted, not ignored as late.
+        self.soloist_previous = previous.filter(|p| p != uri);
+        self.soloist_held = false;
+        self.soloist_started = false;
+        self.soloist_asked = Some((Instant::now(), 1));
+        self.soloist_seek = (start > 1.0).then_some(start);
     }
 
     /// Starts Soloist on `device`, or restarts it if it's on another device or has stopped.
@@ -695,6 +714,46 @@ impl Player {
                 self.status.idle = true;
                 Ok(())
             }
+        }
+    }
+
+    /// The queue from last time, back in place with nothing playing: play carries on from
+    /// where it was.
+    pub fn restore(
+        &mut self,
+        tracks: Vec<Track>,
+        current: Option<usize>,
+        playlist: Option<crate::session::Playlist>,
+        position: f64,
+    ) {
+        self.queue = tracks;
+        self.current = current.filter(|&i| i < self.queue.len());
+        self.playlist = playlist.map(|p| Named {
+            name: p.name,
+            path: p.path,
+            saved: if p.unsaved { u64::MAX } else { self.revision },
+        });
+        self.restored = self.current.map(|i| (i, position));
+        self.status.position = position;
+        self.status.duration = self
+            .current()
+            .map_or(0.0, |t| t.duration_ms as f64 / 1000.0);
+    }
+
+    /// The queue, the song it's on, how far in, and its playlist: what's kept for next time.
+    pub fn session(&self) -> crate::session::Session {
+        crate::session::Session {
+            tracks: self.queue.clone(),
+            current: self.current,
+            position: match self.restored {
+                Some((i, at)) if Some(i) == self.current => at,
+                _ => self.status.position,
+            },
+            playlist: self.playlist.as_ref().map(|p| crate::session::Playlist {
+                name: p.name.clone(),
+                path: p.path.clone(),
+                unsaved: p.saved != self.revision,
+            }),
         }
     }
 
@@ -1035,6 +1094,13 @@ impl Player {
                         _ => return Ok(()),
                     }
                 }
+                // Playing our song: now a seek sticks.
+                if s.status.as_deref() == Some("playing")
+                    && let Some(at) = self.soloist_seek.take()
+                    && let Some(sol) = &self.soloist
+                {
+                    sol.seek(at);
+                }
                 // Soloist moved on to a song we didn't ask for: ours has ended.
                 if let (Some(uri), Some(ours)) = (&s.uri, &self.soloist_uri)
                     && uri != ours
@@ -1258,6 +1324,87 @@ mod tests {
         let error = player.status.last_error.clone().unwrap_or_default();
         assert!(error.contains("didn't start “Ours”"), "{error}");
         assert!(player.status.idle, "the queue had nothing after it");
+    }
+
+    /// Back from Sonos mid-song, Soloist is asked for the same song again: its news counts
+    /// (it isn't "the previous song's"), and the seek to where Sonos was waits until Soloist is
+    /// playing it. No real Soloist here, so nothing plays.
+    #[test]
+    fn the_same_spotify_song_again_carries_on_where_it_was() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-soloist-again");
+        let (mut player, _rx) = silent(&tmp);
+        let song = Track {
+            source: Source::Spotify,
+            uri: "spotify:track:same".into(),
+            title: "Same".into(),
+            duration_ms: 240_000,
+            ..Track::default()
+        };
+        player.queue = vec![song.clone(), song.clone()];
+        player.current = Some(0);
+        player.engine = Engine::Soloist;
+        player.status.idle = false;
+        player.ask_soloist(&song.uri, 0.0);
+        // Back from Sonos, 90 s in: the same song again.
+        player.ask_soloist(&song.uri, 90.0);
+        assert_eq!(player.soloist_previous, None);
+        assert_eq!(player.soloist_seek, Some(90.0));
+        let state = |status: &str, pos: f64| {
+            Event::Soloist(soloist::Event::State(soloist::State {
+                status: Some(status.into()),
+                uri: Some(song.uri.clone()),
+                duration_ms: Some(240_000.0),
+                position_ms: Some(pos * 1000.0),
+                at_ms: Some(crate::secrets::now_secs() as f64 * 1000.0),
+                speed: Some(if status == "playing" { 1.0 } else { 0.0 }),
+                ..Default::default()
+            }))
+        };
+        // Its news counts: paused where it was left, then playing.
+        player.handle(state("paused", 45.0)).unwrap();
+        assert!(player.soloist_started, "not ignored as the previous song's");
+        assert_eq!(player.soloist_seek, Some(90.0), "no seek until it plays");
+        player.handle(state("playing", 45.0)).unwrap();
+        assert_eq!(player.soloist_seek, None, "the seek went once it played");
+        assert_eq!(player.current_index(), Some(0), "nothing skipped");
+    }
+
+    /// The queue from last time: in place, nothing playing. Playing the song it was on carries
+    /// on from there; any other song starts at the beginning.
+    #[test]
+    fn a_restored_queue_carries_on_from_its_place() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-restore");
+        let (mut player, _rx) = silent(&tmp);
+        let songs = named(&["a", "b", "c"]);
+        let mix = crate::session::Playlist {
+            name: "Mix".into(),
+            path: tmp.0.join("Mix.jspf"),
+            unsaved: true,
+        };
+        player.restore(songs, Some(1), Some(mix.clone()), 83.0);
+        assert!(player.status.idle, "nothing plays until asked");
+        assert_eq!(player.current_index(), Some(1));
+        assert_eq!(player.status.position, 83.0);
+        let kept = player.session();
+        assert_eq!((kept.current, kept.position), (Some(1), 83.0));
+        assert_eq!(kept.playlist, Some(mix), "still unsaved");
+
+        // Another song first: from its start.
+        player.jump(2).unwrap();
+        assert_eq!(player.status.position, 0.0);
+        // The restored one: from where it was.
+        player.restore(named(&["a", "b", "c"]), Some(1), None, 83.0);
+        player.jump(1).unwrap();
+        assert_eq!(player.status.position, 83.0);
+        player.stop().unwrap();
     }
 
     /// Sonos has its own volume. Coming back to this computer brings back this computer's,
