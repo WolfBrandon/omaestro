@@ -246,6 +246,10 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
     match &app.overlay {
         Some(Overlay::Help) => draw_help(buf, area, t, &mut hit),
         Some(Overlay::FileInfo(info)) => screens::draw_file_info(buf, area, info, t, &mut hit),
+        Some(Overlay::LastFm(step)) => screens::draw_lastfm(buf, area, step, t, &mut hit),
+        Some(Overlay::ListenBrainz(step)) => {
+            screens::draw_listenbrainz(buf, area, step, t, &mut hit)
+        }
         Some(Overlay::Columns(sel)) => draw_columns_menu(buf, area, app, *sel, t, &mut hit),
         Some(Overlay::Picker { sel, all }) => {
             draw_picker(buf, area, a.output, app, player, *sel, *all, t, &mut hit)
@@ -1744,8 +1748,21 @@ mod tests {
                 assert!(!text.contains("Rescan now"), "only Playback shows\n{text}");
             }
             key(&mut app, KeyCode::BackTab);
-            for _ in 0..3 {
+            // Integrations, and the Last.fm sign-in screen.
+            for _ in 0..crate::settings::INTEGRATIONS {
                 key(&mut app, KeyCode::Tab);
+            }
+            key(&mut app, KeyCode::Enter);
+            let (text, _) = frame(&app, 0.0);
+            if (w, h) == (120, 60) {
+                assert!(
+                    text.contains("CONNECT LAST.FM") && text.contains("Shared secret"),
+                    "{text}"
+                );
+            }
+            key(&mut app, KeyCode::Esc);
+            for _ in 0..crate::settings::INTEGRATIONS - crate::settings::SOURCES {
+                key(&mut app, KeyCode::BackTab);
             }
             key(&mut app, KeyCode::Enter);
             let (text, _) = frame(&app, 0.0);
@@ -1831,10 +1848,8 @@ mod tests {
                 app.on_key(KeyEvent::from(KeyCode::Char(c)), &ctx).unwrap();
             }
         };
-        match std::env::var("OMAESTRO_PREVIEW")
-            .as_deref()
-            .unwrap_or("browse")
-        {
+        let which = std::env::var("OMAESTRO_PREVIEW").unwrap_or_else(|_| "browse".into());
+        match which.as_str() {
             "search" => {
                 app.search.show = [true, false, false];
                 keys(&mut app, "/black keys");
@@ -1853,10 +1868,24 @@ mod tests {
                     info.details = Some(details);
                 }
             }
+            // Settings at Integrations, then the Last.fm sign-in.
+            "integrations" | "lastfm" | "listenbrainz" => {
+                app.open_settings();
+                for _ in 0..crate::settings::INTEGRATIONS {
+                    app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
+                }
+                if which == "lastfm" {
+                    app.on_key(KeyEvent::from(KeyCode::Enter), &ctx).unwrap();
+                }
+                if which == "listenbrainz" {
+                    app.on_key(KeyEvent::from(KeyCode::Down), &ctx).unwrap();
+                    app.on_key(KeyEvent::from(KeyCode::Enter), &ctx).unwrap();
+                }
+            }
             // Settings at Appearance, on the theme row.
             "themes" => {
                 app.open_settings();
-                for _ in 0..4 {
+                for _ in 0..crate::settings::APPEARANCE {
                     app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
                 }
                 for _ in 0..2 {

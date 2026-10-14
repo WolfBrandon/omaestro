@@ -10,7 +10,7 @@ In the order they'll be built:
 - [x] **File Info**: everything about a song, in a pop-up (0.9.3).
 - [x] **Update in place**: switch to a new version without closing and reopening (0.9.4).
 - [ ] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
-  ListenBrainz.
+  ListenBrainz. (Signing in to both, in Settings → Integrations: done in 0.9.5.)
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
 - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.
@@ -61,3 +61,20 @@ and puts it back when playback stops or OMAESTRO quits.
 - **Other sound** on that device follows the same rate meanwhile.
 
 Today PipeWire runs everything at 48 kHz, so 44.1 and 96 kHz files are resampled.
+
+# After 1.0.0
+
+## Qobuz
+
+Qobuz as a source, like Spotify: search, your playlists and favourites, hi-res playback here
+and on Sonos. Not for 1.0.0, because there's no open way in yet:
+- **The API is partner-only.** The app ID and secret come from Qobuz on request
+  (api@qobuz.com).
+- **The unofficial route is off the table.** In September 2026 Qobuz asked QBZ, the
+  open-source Linux client that used the web player's own credentials, to shut down, and it
+  did. A public project doing the same would get the same request, and it breaks Qobuz's
+  terms for the account using it.
+- **What's left:**
+  - Apply to Qobuz for access as OMAESTRO's developer.
+  - Without any Qobuz API, play the Qobuz albums and playlists saved as Sonos favourites,
+    on Sonos only, through Sonos's own Qobuz link (Sonos service 31).

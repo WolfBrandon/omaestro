@@ -5,7 +5,8 @@
 
 use crate::browse::{Browse, Catalog, Kind, Pane, Step, movement, step};
 use crate::config::Config;
-use crate::connect::{self, SpotifyStep, YouTubeStep};
+use crate::connect::{self, LastFmStep, ListenBrainzStep, SpotifyStep, YouTubeStep};
+use crate::integrations::Service;
 use crate::library::scan::{Progress, Summary};
 use crate::library::{Db, Source, Track};
 use crate::player::{AudioDevice, Named, Output};
@@ -120,6 +121,10 @@ pub enum News {
     },
     /// How each source is doing.
     Sources(crate::status::Statuses),
+    /// Last.fm's page to allow OMAESTRO on, while signing in.
+    LastFmAllow(String),
+    LastFmSignedIn(Result<crate::integrations::LastFm, String>),
+    ListenBrainzSignedIn(Result<crate::integrations::ListenBrainz, String>),
     /// A file's own details, read for File Info.
     FileDetails {
         path: String,
@@ -221,6 +226,9 @@ pub enum Overlay {
     Help,
     /// File Info for one song.
     FileInfo(Box<FileInfo>),
+    /// Signing in to Last.fm, or ListenBrainz.
+    LastFm(LastFmStep),
+    ListenBrainz(ListenBrainzStep),
     /// The queue's show/hide-columns menu; the highlighted row.
     Columns(usize),
     /// The output picker: the highlighted row, and whether hidden outputs show.
@@ -421,6 +429,11 @@ pub struct App {
     pub themes: Vec<crate::theme::Installed>,
     /// The clock the visualizer's animations run on.
     pub animation_clock: Instant,
+    /// Where your plays are sent, if signed in.
+    pub lastfm: Option<crate::integrations::LastFm>,
+    pub listenbrainz: Option<crate::integrations::ListenBrainz>,
+    /// Set to stop a Last.fm sign-in that's waiting for you to allow OMAESTRO.
+    lastfm_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// How each source is doing, and when that was last checked (checks run in the
     /// background).
     pub statuses: crate::status::Statuses,
@@ -481,6 +494,9 @@ impl App {
             theme_fixed: false,
             themes: crate::theme::installed(),
             animation_clock: Instant::now(),
+            lastfm: crate::integrations::LastFm::load(),
+            listenbrainz: crate::integrations::ListenBrainz::load(),
+            lastfm_cancel: None,
             statuses: crate::status::Statuses::default(),
             checking_sources: false,
             sources_checked: None,
@@ -1198,6 +1214,8 @@ impl App {
             youtube: self.youtube_account.as_ref().map(|a| a.user.clone()),
             sonos: self.sonos_status.clone(),
             statuses: self.statuses.clone(),
+            lastfm: self.lastfm.as_ref().map(|a| a.user.clone()),
+            listenbrainz: self.listenbrainz.as_ref().map(|a| a.user.clone()),
             themes: self.themes.clone(),
             omarchy_theme: crate::theme::omarchy_current(),
         }
@@ -1207,6 +1225,9 @@ impl App {
     fn close_connect(&mut self) {
         if let Some(login) = self.spotify_login.take() {
             login.cancel();
+        }
+        if let Some(cancel) = self.lastfm_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.overlay = self.parked_settings.take().map(Overlay::Settings);
     }
@@ -1269,6 +1290,28 @@ impl App {
                 self.sign_out(source);
                 None
             }
+            O::ConnectTo(service) => {
+                self.park_settings();
+                self.overlay = Some(match service {
+                    Service::LastFm => Overlay::LastFm(LastFmStep::start()),
+                    Service::ListenBrainz => Overlay::ListenBrainz(ListenBrainzStep::start()),
+                });
+                None
+            }
+            O::SignOutOf(service) => {
+                match service {
+                    Service::LastFm => {
+                        crate::integrations::LastFm::sign_out();
+                        self.lastfm = None;
+                    }
+                    Service::ListenBrainz => {
+                        crate::integrations::ListenBrainz::sign_out();
+                        self.listenbrainz = None;
+                    }
+                }
+                self.status = format!("Signed out of {}", service.name());
+                None
+            }
             O::SetUpSoloist => {
                 self.park_settings();
                 self.overlay = Some(Overlay::Spotify(SpotifyStep::start(true)));
@@ -1291,6 +1334,38 @@ impl App {
         match outcome {
             O::Stay => {}
             O::Close => self.close_connect(),
+            O::LastFmKeys { key, secret } => {
+                self.overlay = Some(Overlay::LastFm(LastFmStep::Starting {
+                    key: key.clone(),
+                    secret: secret.clone(),
+                }));
+                let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.lastfm_cancel = Some(cancel.clone());
+                let news = self.news.clone();
+                std::thread::spawn(move || {
+                    let page = news.clone();
+                    let result = crate::integrations::lastfm_sign_in(
+                        &key,
+                        &secret,
+                        move |url| {
+                            let _ = secrets::open_in_browser(&url);
+                            let _ = page.send(News::LastFmAllow(url));
+                        },
+                        cancel,
+                    );
+                    let _ = news.send(News::LastFmSignedIn(result));
+                });
+            }
+            O::ListenBrainzToken(token) => {
+                self.overlay = Some(Overlay::ListenBrainz(ListenBrainzStep::Checking(
+                    token.clone(),
+                )));
+                let news = self.news.clone();
+                std::thread::spawn(move || {
+                    let result = crate::integrations::listenbrainz_sign_in(&token);
+                    let _ = news.send(News::ListenBrainzSignedIn(result));
+                });
+            }
             O::SpotifyLogin(client_id) => {
                 let news = self.news.clone();
                 match spotify::login(&client_id, move |r| {
@@ -1449,6 +1524,78 @@ impl App {
                 }
                 Err(e) => self.sonos_status = e,
             },
+            News::LastFmAllow(url) => {
+                if let Some(Overlay::LastFm(step)) = &mut self.overlay
+                    && let LastFmStep::Starting { key, secret } = step
+                {
+                    *step = LastFmStep::Allowing {
+                        url,
+                        key: key.clone(),
+                        secret: secret.clone(),
+                    };
+                }
+            }
+            News::LastFmSignedIn(result) => {
+                self.lastfm_cancel = None;
+                let step = match &mut self.overlay {
+                    Some(Overlay::LastFm(step)) => Some(step),
+                    _ => None,
+                };
+                match result {
+                    Ok(account) => {
+                        self.status = format!("Connected to Last.fm as {}", account.user);
+                        if let Some(step) = step {
+                            *step = LastFmStep::Done(account.user.clone());
+                        }
+                        self.lastfm = Some(account);
+                    }
+                    Err(e) if e == "cancelled" => {}
+                    Err(e) => {
+                        if let Some(step) = step {
+                            let (key, secret) = match step {
+                                LastFmStep::Starting { key, secret }
+                                | LastFmStep::Allowing { key, secret, .. } => {
+                                    (key.clone(), secret.clone())
+                                }
+                                _ => Default::default(),
+                            };
+                            *step = LastFmStep::Keys {
+                                key,
+                                secret,
+                                field: 1,
+                                error: Some(e),
+                            };
+                        }
+                    }
+                }
+            }
+            News::ListenBrainzSignedIn(result) => {
+                let step = match &mut self.overlay {
+                    Some(Overlay::ListenBrainz(step)) => Some(step),
+                    _ => None,
+                };
+                match result {
+                    Ok(account) => {
+                        self.status = format!("Connected to ListenBrainz as {}", account.user);
+                        if let Some(step) = step {
+                            *step = ListenBrainzStep::Done(account.user.clone());
+                        }
+                        self.listenbrainz = Some(account);
+                    }
+                    Err(e) => {
+                        if let Some(step) = step {
+                            let input = match step {
+                                ListenBrainzStep::Checking(token) => token.clone(),
+                                _ => String::new(),
+                            };
+                            *step = ListenBrainzStep::Token {
+                                input,
+                                error: Some(e),
+                            };
+                        }
+                    }
+                }
+            }
             News::FileDetails { path, result } => {
                 if let Some(Overlay::FileInfo(info)) = &mut self.overlay
                     && info.track.path == path
@@ -1486,6 +1633,8 @@ impl App {
         let text = text.replace(['\n', '\r'], " ");
         match &mut self.overlay {
             Some(Overlay::Spotify(step)) => step.paste(&text),
+            Some(Overlay::LastFm(step)) => step.paste(&text),
+            Some(Overlay::ListenBrainz(step)) => step.paste(&text),
             Some(Overlay::Rename { name, .. }) => name.push_str(text.trim()),
             Some(Overlay::Settings(_)) => {
                 let rows = settings::rows(&self.config, &self.facts());
@@ -1635,6 +1784,14 @@ impl App {
         match overlay {
             // Handled above.
             Overlay::FileInfo(_) => {}
+            Overlay::LastFm(step) => {
+                let outcome = step.on_key(key);
+                self.connect_outcome(outcome);
+            }
+            Overlay::ListenBrainz(step) => {
+                let outcome = step.on_key(key);
+                self.connect_outcome(outcome);
+            }
             // Any key closes the help.
             Overlay::Help => self.overlay = None,
             Overlay::Columns(sel) => {
@@ -2033,7 +2190,15 @@ impl App {
                     Some(Overlay::Spotify(step)) => Some(step),
                     _ => None,
                 };
-                if let Some(url) = link.url(step) {
+                // Last.fm's page to allow OMAESTRO on is on its sign-in screen.
+                let url = match (&self.overlay, link) {
+                    (
+                        Some(Overlay::LastFm(LastFmStep::Allowing { url, .. })),
+                        connect::Link::LastFmAllow,
+                    ) => Some(url.clone()),
+                    _ => link.url(step),
+                };
+                if let Some(url) = url {
                     let copy = matches!(target, Target::Copy(_));
                     self.status = match (copy, copy && secrets::copy_to_clipboard(&url).is_ok()) {
                         (true, true) => "Copied to the clipboard".into(),
@@ -2790,6 +2955,92 @@ pub mod tests {
         assert_eq!(shows(&app), Some(queue[0].title.clone()));
         press(&mut app, KeyCode::Esc, &ctx);
         assert!(matches!(app.overlay, Some(Overlay::Search)));
+    }
+
+    #[test]
+    fn integrations_sign_in_and_out() {
+        use crate::integrations::{LastFm, ListenBrainz};
+        let tmp = TempDir::new("app-integrations");
+        let mut app = app(&tmp);
+        let ctx = Ctx {
+            queue: &[],
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+        };
+        // Settings → Integrations → Connect (Last.fm is the first row there).
+        app.overlay = Some(Overlay::Settings(Settings::new(&settings::rows(
+            &app.config,
+            &app.facts(),
+        ))));
+        for _ in 0..settings::INTEGRATIONS {
+            press(&mut app, KeyCode::Tab, &ctx);
+        }
+        press(&mut app, KeyCode::Enter, &ctx);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::LastFm(LastFmStep::Keys { .. }))
+        ));
+        // Esc goes back to Settings.
+        press(&mut app, KeyCode::Esc, &ctx);
+        assert!(matches!(app.overlay, Some(Overlay::Settings(_))));
+
+        // What the background sign-in says, step by step (no network here).
+        app.overlay = Some(Overlay::LastFm(LastFmStep::Starting {
+            key: "k".into(),
+            secret: "s".into(),
+        }));
+        app.on_news(News::LastFmAllow("https://www.last.fm/api/auth/?x".into()))
+            .unwrap();
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::LastFm(LastFmStep::Allowing { url, .. })) if url.contains("last.fm")
+        ));
+        app.on_news(News::LastFmSignedIn(Err(
+            "That shared secret doesn't go".into()
+        )))
+        .unwrap();
+        assert!(
+            matches!(
+                &app.overlay,
+                Some(Overlay::LastFm(LastFmStep::Keys { key, secret, error: Some(_), .. }))
+                    if key == "k" && secret == "s"
+            ),
+            "back to the keys, kept, with the reason"
+        );
+        let account = LastFm {
+            api_key: "k".into(),
+            secret: "s".into(),
+            session_key: "sk".into(),
+            user: "brandon".into(),
+        };
+        app.on_news(News::LastFmSignedIn(Ok(account))).unwrap();
+        assert!(
+            matches!(&app.overlay, Some(Overlay::LastFm(LastFmStep::Done(u))) if u == "brandon")
+        );
+        assert_eq!(app.facts().lastfm.as_deref(), Some("brandon"));
+
+        app.overlay = Some(Overlay::ListenBrainz(ListenBrainzStep::Checking(
+            "tok".into(),
+        )));
+        app.on_news(News::ListenBrainzSignedIn(Err("unknown token".into())))
+            .unwrap();
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::ListenBrainz(ListenBrainzStep::Token { input, error: Some(_) })) if input == "tok"
+        ));
+        let lb = ListenBrainz {
+            token: "tok".into(),
+            user: "brandon".into(),
+        };
+        app.on_news(News::ListenBrainzSignedIn(Ok(lb))).unwrap();
+        assert_eq!(app.facts().listenbrainz.as_deref(), Some("brandon"));
+        let rows = settings::rows(&app.config, &app.facts());
+        let lb_row = rows
+            .iter()
+            .find(|r| r.id == settings::Id::ListenBrainz)
+            .unwrap();
+        assert_eq!(lb_row.button, Some("Sign out"));
     }
 
     #[test]

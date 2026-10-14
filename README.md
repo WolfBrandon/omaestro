@@ -108,7 +108,15 @@ Everything is optional; open Settings with `F2` or the gear button.
    - Your desktop may ask to unlock the keyring.
    - The yt-dlp project warns that heavy automated use with cookies can get an account
      flagged. OMAESTRO only does what you'd do by hand.
-4. **Sonos**. Speakers are found by themselves.
+4. **Last.fm and ListenBrainz** (Settings → Integrations). Where your plays will be sent
+   (scrobbled).
+   - **Last.fm:** make a free API account at
+     [last.fm/api/account/create](https://www.last.fm/api/account/create) (any name; leave
+     the Callback URL empty). Paste its API key and shared secret, then allow OMAESTRO on the
+     Last.fm page that opens.
+   - **ListenBrainz:** paste the user token from
+     [listenbrainz.org/settings](https://listenbrainz.org/settings/).
+5. **Sonos**. Speakers are found by themselves.
    - They fetch local files and YouTube songs from OMAESTRO on port 47100, so allow that from
      your home network if you run a firewall, e.g. with ufw (adjust the network to yours):
      ```
@@ -202,8 +210,8 @@ never = []                              # speaker ids never to send anything to
 ## Files it uses
 
 - `~/.config/omaestro/config.toml`: settings.
-- `~/.config/omaestro/spotify.json`, `soloist.json`, `youtube.json`, `ytm-cookies.txt`:
-  sign-ins, readable only by you. Deleting one signs out.
+- `~/.config/omaestro/spotify.json`, `soloist.json`, `youtube.json`, `ytm-cookies.txt`,
+  `lastfm.json`, `listenbrainz.json`: sign-ins, readable only by you. Deleting one signs out.
 - `~/.local/share/omaestro/playlists/*.jspf`: your playlists (JSPF, a standard format).
 - `~/.local/share/omaestro/last-queue.jspf` and `last-queue.json`: the queue as you left it.
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, once downloaded.
@@ -219,6 +227,7 @@ never = []                              # speaker ids never to send anything to
 - **No telemetry.** OMAESTRO talks to:
   - Spotify's Web API, through your own app;
   - YouTube, directly and through yt-dlp;
+  - Last.fm and ListenBrainz, once you connect them;
   - Sonos speakers on your network;
   - Soloist, on this computer.
 - **Sign-ins** are stored in `~/.config/omaestro`, readable only by you. The YouTube Music

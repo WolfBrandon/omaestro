@@ -6,25 +6,37 @@
 use crate::app::{Action, group_thousands};
 use crate::browse::{movement, step};
 use crate::config::{Art, Config};
+use crate::integrations::Service;
 use crate::library::Source;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::cell::Cell;
 
+/// The sections, by name (their order on screen).
+pub const LIBRARY: usize = 0;
+pub const PLAYBACK: usize = 1;
+pub const OUTPUTS: usize = 2;
+pub const SOURCES: usize = 3;
+pub const INTEGRATIONS: usize = 4;
+pub const APPEARANCE: usize = 5;
+pub const ABOUT: usize = 6;
+
 /// Each section's icon, for its pill (as in the design).
-pub const SECTION_ICONS: [&str; 6] = [
+pub const SECTION_ICONS: [&str; 7] = [
     "\u{f001}",
     "\u{f04b}",
     "\u{f028}",
     "\u{f1e6}",
+    "\u{f1616}",
     "\u{f03d8}",
     "\u{f05a}",
 ];
 
-pub const SECTIONS: [&str; 6] = [
+pub const SECTIONS: [&str; 7] = [
     "Library",
     "Playback",
     "Outputs",
     "Sources",
+    "Integrations",
     "Appearance",
     "About",
 ];
@@ -47,6 +59,8 @@ pub enum Id {
     Spotify,
     Soloist,
     YouTube,
+    LastFm,
+    ListenBrainz,
     Theme,
     AlbumArt,
     Visualizer,
@@ -158,6 +172,9 @@ pub struct Facts {
     pub sonos: String,
     /// How each source is doing, from the latest background check.
     pub statuses: crate::status::Statuses,
+    /// Who's signed in to Last.fm and ListenBrainz.
+    pub lastfm: Option<String>,
+    pub listenbrainz: Option<String>,
     /// The Omarchy themes installed, and the one Omarchy is using.
     pub themes: Vec<crate::theme::Installed>,
     pub omarchy_theme: Option<String>,
@@ -172,23 +189,27 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     // Library
     for (i, folder) in config.library_paths.iter().enumerate() {
         let label = if i == 0 { "Music folders" } else { "" };
-        rows.push(Row::new(0, label, Id::Folder(i), Value::Text(folder.clone())).button("Remove"));
+        rows.push(
+            Row::new(LIBRARY, label, Id::Folder(i), Value::Text(folder.clone())).button("Remove"),
+        );
     }
     let label = if config.library_paths.is_empty() {
         "Music folders"
     } else {
         ""
     };
-    rows.push(Row::new(0, label, Id::AddFolder, Value::Text(String::new())).button("+ Add folder"));
+    rows.push(
+        Row::new(LIBRARY, label, Id::AddFolder, Value::Text(String::new())).button("+ Add folder"),
+    );
     rows.push(Row::new(
-        0,
+        LIBRARY,
         "Scan on launch",
         Id::ScanOnLaunch,
         on_off(config.scan_on_launch),
     ));
     rows.push(
         Row::new(
-            0,
+            LIBRARY,
             "Readers at once",
             Id::Readers,
             Value::Number(config.scan_threads as u32),
@@ -197,7 +218,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     );
     rows.push(
         Row::new(
-            0,
+            LIBRARY,
             "Index",
             Id::Index,
             Value::Text(format!(
@@ -216,7 +237,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     };
     rows.push(
         Row::new(
-            1,
+            PLAYBACK,
             "ReplayGain",
             Id::ReplayGain,
             Value::Choice(vec!["Off", "Track", "Album"], rg),
@@ -224,14 +245,14 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         .note("evens out loudness"),
     );
     rows.push(Row::new(
-        1,
+        PLAYBACK,
         "Gapless",
         Id::Gapless,
         on_off(config.playback.gapless),
     ));
     rows.push(
         Row::new(
-            1,
+            PLAYBACK,
             "Output rate",
             Id::OutputRate,
             Value::Text("Set by PipeWire".into()),
@@ -239,20 +260,25 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         .note("the badge shows → 48k if it resamples"),
     );
     rows.push(Row::new(
-        1,
+        PLAYBACK,
         "When I quit",
         Id::OnQuit,
         Value::Text("Stop the music".into()),
     ));
     // Outputs
     rows.push(
-        Row::new(2, "Sonos", Id::Sonos, Value::Text(facts.sonos.clone()))
-            .button("Look again")
-            .status(facts.statuses.sonos.clone()),
+        Row::new(
+            OUTPUTS,
+            "Sonos",
+            Id::Sonos,
+            Value::Text(facts.sonos.clone()),
+        )
+        .button("Look again")
+        .status(facts.statuses.sonos.clone()),
     );
     rows.push(
         Row::new(
-            2,
+            OUTPUTS,
             "Media port",
             Id::MediaPort,
             Value::Text(config.sonos.media_port.to_string()),
@@ -262,14 +288,14 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     // Sources
     let folders = config.library_paths.join(", ");
     rows.push(
-        Row::new(3, "Local", Id::Local, Value::Text(folders))
+        Row::new(SOURCES, "Local", Id::Local, Value::Text(folders))
             .note(format!("{} tracks", group_thousands(facts.tracks)))
             .status(facts.statuses.local.clone()),
     );
     let spotify = facts.statuses.spotify.clone();
     rows.push(match &facts.spotify {
         Some(user) => Row::new(
-            3,
+            SOURCES,
             "Spotify",
             Id::Spotify,
             Value::Text(format!("Connected as {user}")),
@@ -277,7 +303,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         .button("Sign out")
         .status(spotify),
         None => Row::new(
-            3,
+            SOURCES,
             "Spotify",
             Id::Spotify,
             Value::Text("Not connected".into()),
@@ -286,7 +312,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     });
     rows.push(
         Row::new(
-            3,
+            SOURCES,
             "  playback",
             Id::Soloist,
             Value::Text(facts.soloist.clone()),
@@ -300,7 +326,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     let youtube = facts.statuses.youtube.clone();
     rows.push(match &facts.youtube {
         Some(user) => Row::new(
-            3,
+            SOURCES,
             "YouTube Music",
             Id::YouTube,
             Value::Text(format!("Connected as {user}")),
@@ -308,16 +334,49 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
         .button("Sign out")
         .status(youtube),
         None => Row::new(
-            3,
+            SOURCES,
             "YouTube Music",
             Id::YouTube,
             Value::Text("Not connected".into()),
         )
         .button("Connect"),
     });
+    // Integrations: where your plays are sent.
+    rows.push(match &facts.lastfm {
+        Some(user) => Row::new(
+            INTEGRATIONS,
+            "Last.fm",
+            Id::LastFm,
+            Value::Text(format!("Connected as {user}")),
+        )
+        .button("Sign out"),
+        None => Row::new(
+            INTEGRATIONS,
+            "Last.fm",
+            Id::LastFm,
+            Value::Text("Not connected".into()),
+        )
+        .button("Connect"),
+    });
+    rows.push(match &facts.listenbrainz {
+        Some(user) => Row::new(
+            INTEGRATIONS,
+            "ListenBrainz",
+            Id::ListenBrainz,
+            Value::Text(format!("Connected as {user}")),
+        )
+        .button("Sign out"),
+        None => Row::new(
+            INTEGRATIONS,
+            "ListenBrainz",
+            Id::ListenBrainz,
+            Value::Text("Not connected".into()),
+        )
+        .button("Connect"),
+    });
     // Appearance
     rows.push(Row::new(
-        4,
+        APPEARANCE,
         "Album art",
         Id::AlbumArt,
         Value::Choice(
@@ -331,7 +390,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     ));
     rows.push(
         Row::new(
-            4,
+            APPEARANCE,
             "Visualizer",
             Id::Visualizer,
             on_off(config.appearance.visualizer),
@@ -341,7 +400,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     let kinds = crate::animation::Kind::ALL;
     rows.push(
         Row::new(
-            4,
+            APPEARANCE,
             "Animation",
             Id::Animation,
             Value::Choice(
@@ -376,7 +435,7 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     };
     rows.push(
         Row::new(
-            4,
+            APPEARANCE,
             "Theme",
             Id::Theme,
             Value::Pick {
@@ -389,13 +448,13 @@ pub fn rows(config: &Config, facts: &Facts) -> Vec<Row> {
     );
     // About
     rows.push(Row::new(
-        5,
+        ABOUT,
         "Version",
         Id::Info,
         Value::Text(format!("OMAESTRO v{}", env!("CARGO_PKG_VERSION"))),
     ));
     rows.push(Row::new(
-        5,
+        ABOUT,
         "Designed with",
         Id::Otis,
         Value::Text("OTIS".into()),
@@ -414,6 +473,9 @@ pub enum Outcome {
     Do(Action),
     Connect(Source),
     SignOut(Source),
+    /// Sign in to, or out of, Last.fm or ListenBrainz.
+    ConnectTo(Service),
+    SignOutOf(Service),
     SetUpSoloist,
     RemoveSoloist,
     FindSonos,
@@ -675,6 +737,10 @@ impl Settings {
             (Id::Soloist, _) => Outcome::SetUpSoloist,
             (Id::YouTube, Some("Sign out")) => Outcome::SignOut(Source::YouTube),
             (Id::YouTube, _) => Outcome::Connect(Source::YouTube),
+            (Id::LastFm, Some("Sign out")) => Outcome::SignOutOf(Service::LastFm),
+            (Id::LastFm, _) => Outcome::ConnectTo(Service::LastFm),
+            (Id::ListenBrainz, Some("Sign out")) => Outcome::SignOutOf(Service::ListenBrainz),
+            (Id::ListenBrainz, _) => Outcome::ConnectTo(Service::ListenBrainz),
             _ => Outcome::Stay,
         }
     }
@@ -748,7 +814,7 @@ mod tests {
         };
         let mut config = Config::default();
         let mut s = Settings::new(&rows(&config, &facts));
-        s.go_to_section(&rows(&config, &facts), 4);
+        s.go_to_section(&rows(&config, &facts), APPEARANCE);
         let row = |config: &Config| {
             rows(config, &facts)
                 .into_iter()

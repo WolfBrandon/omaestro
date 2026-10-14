@@ -3,6 +3,18 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.5 — 2026-10-14
+
+- **Settings → Integrations**, a new section for where your plays will be sent.
+  - **Last.fm:** make a free API account, paste its key and secret, then allow OMAESTRO on
+    Last.fm's page. The screen moves on by itself once you have.
+  - **ListenBrainz:** paste the token from your settings page; it's checked with
+    ListenBrainz.
+  - Both are kept readable only by you, and sign out from the same rows.
+  - Sending plays (scrobbling) comes next.
+- Qobuz is on the backlog for after 1.0.0, with why: its API is partner-only, and Qobuz had
+  the open-source client that worked around that shut down.
+
 ## 0.9.4 — 2026-10-14
 
 - **Update in place.** When `./install.sh` puts a new version where OMAESTRO was started from,

@@ -13,6 +13,9 @@ for this repository, rather than in a public issue.
   - `soloist.json`: your Soloist API key.
   - `youtube.json` and `ytm-cookies.txt`: a copy of your browser's YouTube cookies, made by
     yt-dlp when you connect YouTube Music.
+  - `lastfm.json`: your Last.fm API key and secret, and the session key from allowing
+    OMAESTRO.
+  - `listenbrainz.json`: your ListenBrainz user token.
 - **A file server** on port 47100, while OMAESTRO plays on Sonos. It serves only the songs
   handed to a speaker, under random addresses, and everything else gets "not found".
 - **Nothing is sent anywhere else.** No telemetry.

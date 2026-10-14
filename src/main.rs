@@ -9,6 +9,7 @@ mod config;
 mod connect;
 mod desktop;
 mod fileinfo;
+mod integrations;
 mod library;
 mod player;
 mod playlist;

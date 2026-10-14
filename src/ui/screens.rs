@@ -1198,6 +1198,195 @@ pub(super) fn draw_spotify(
     hints(buf, inner, x, inner.bottom().saturating_sub(1), pairs, t);
 }
 
+pub(super) fn draw_lastfm(
+    buf: &mut Buffer,
+    screen: Rect,
+    step: &crate::connect::LastFmStep,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    use crate::connect::LastFmStep;
+    let inner = popup(buf, centred(screen, 80, 22), "CONNECT LAST.FM", t, hit);
+    let x = inner.x + 2;
+    let mut y = inner.y + 1;
+    let pairs: &[(&str, &str)] = match step {
+        LastFmStep::Keys {
+            key,
+            secret,
+            field: on,
+            error,
+        } => {
+            y = paragraph(
+                buf,
+                inner,
+                x,
+                y,
+                "Last.fm lets apps like OMAESTRO in with a free API account of your own.",
+                fg(t.light),
+            );
+            y = numbered(
+                buf,
+                inner,
+                x,
+                y + 1,
+                "1",
+                "Sign in to Last.fm and create an API account here. Any application name (e.g. OMAESTRO); leave the Callback URL empty.",
+                t,
+            );
+            y = link_row(
+                buf,
+                inner,
+                x + 4,
+                y,
+                crate::integrations::LASTFM_CREATE,
+                Link::LastFmCreate,
+                t,
+                hit,
+            );
+            y = numbered(
+                buf,
+                inner,
+                x,
+                y + 1,
+                "2",
+                "Paste the API key and the Shared secret it shows (Ctrl+Shift+V). Tab moves between them.",
+                t,
+            );
+            let w = inner.width.saturating_sub(22);
+            put(buf, inner, x + 4, y + 1, "API key", fg(t.dim));
+            field(buf, Rect::new(x + 18, y + 1, w, 1), key, *on == 0, t);
+            put(buf, inner, x + 4, y + 2, "Shared secret", fg(t.dim));
+            field(buf, Rect::new(x + 18, y + 2, w, 1), secret, *on == 1, t);
+            y = numbered(
+                buf,
+                inner,
+                x,
+                y + 4,
+                "3",
+                "Press Enter: your browser opens Last.fm, where you allow OMAESTRO.",
+                t,
+            );
+            if let Some(e) = error {
+                paragraph(buf, inner, x, y + 1, e, fg(t.red));
+            }
+            &[("Tab", "next field"), ("⏎", "connect"), ("Esc", "cancel")]
+        }
+        LastFmStep::Starting { .. } => {
+            paragraph(buf, inner, x, y, "Asking Last.fm…", fg(t.light));
+            &[("Esc", "cancel")]
+        }
+        LastFmStep::Allowing { url, .. } => {
+            y = paragraph(
+                buf,
+                inner,
+                x,
+                y,
+                "Your browser should be showing Last.fm: choose Yes, allow access. This screen moves on by itself once you have.",
+                fg(t.light),
+            );
+            y = paragraph(
+                buf,
+                inner,
+                x,
+                y + 1,
+                "If no browser opened, open the page from here:",
+                fg(t.dim),
+            );
+            link_row(buf, inner, x, y, url, Link::LastFmAllow, t, hit);
+            &[("click", "the link to open it"), ("Esc", "cancel")]
+        }
+        LastFmStep::Done(user) => {
+            put(buf, inner, x, y, "✓", bold(t.accent));
+            let note = format!("Connected to Last.fm as {user}.");
+            paragraph(buf, inner, x + 2, y, &note, bold(t.bright));
+            &[("any key", "close")]
+        }
+    };
+    hints(buf, inner, x, inner.bottom().saturating_sub(1), pairs, t);
+}
+
+pub(super) fn draw_listenbrainz(
+    buf: &mut Buffer,
+    screen: Rect,
+    step: &crate::connect::ListenBrainzStep,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    use crate::connect::ListenBrainzStep;
+    let inner = popup(buf, centred(screen, 80, 18), "CONNECT LISTENBRAINZ", t, hit);
+    let x = inner.x + 2;
+    let mut y = inner.y + 1;
+    let pairs: &[(&str, &str)] = match step {
+        ListenBrainzStep::Token { input, error } => {
+            y = paragraph(
+                buf,
+                inner,
+                x,
+                y,
+                "ListenBrainz (from MetaBrainz, who make MusicBrainz and Picard) keeps your listening history, free and open.",
+                fg(t.light),
+            );
+            y = numbered(
+                buf,
+                inner,
+                x,
+                y + 1,
+                "1",
+                "Sign in to ListenBrainz and open your settings, where your User token is:",
+                t,
+            );
+            y = link_row(
+                buf,
+                inner,
+                x + 4,
+                y,
+                crate::integrations::LISTENBRAINZ_SETTINGS,
+                Link::ListenBrainzSettings,
+                t,
+                hit,
+            );
+            y = numbered(
+                buf,
+                inner,
+                x,
+                y + 1,
+                "2",
+                "Copy the token, paste it here (Ctrl+Shift+V) and press Enter.",
+                t,
+            );
+            field(
+                buf,
+                Rect::new(x + 4, y + 1, inner.width.saturating_sub(12), 1),
+                input,
+                true,
+                t,
+            );
+            if let Some(e) = error {
+                paragraph(buf, inner, x, y + 3, e, fg(t.red));
+            }
+            &[("⏎", "connect"), ("Esc", "cancel")]
+        }
+        ListenBrainzStep::Checking(_) => {
+            paragraph(
+                buf,
+                inner,
+                x,
+                y,
+                "Checking the token with ListenBrainz…",
+                fg(t.light),
+            );
+            &[("Esc", "cancel")]
+        }
+        ListenBrainzStep::Done(user) => {
+            put(buf, inner, x, y, "✓", bold(t.accent));
+            let note = format!("Connected to ListenBrainz as {user}.");
+            paragraph(buf, inner, x + 2, y, &note, bold(t.bright));
+            &[("any key", "close")]
+        }
+    };
+    hints(buf, inner, x, inner.bottom().saturating_sub(1), pairs, t);
+}
+
 pub(super) fn draw_youtube(
     buf: &mut Buffer,
     screen: Rect,
