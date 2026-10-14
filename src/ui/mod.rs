@@ -15,7 +15,7 @@ use crate::app::{App, Hit, OutputChoice, Overlay, Target, group_thousands};
 use crate::browse::Pane;
 use crate::columns::Column;
 use crate::library::{Source, Track};
-use crate::player::{Player, Status};
+use crate::player::{Player, Quality, Status};
 use crate::theme::Theme;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -72,7 +72,14 @@ const LOGO: [(&str, &str); 4] = [
 const LOGO_W: u16 = 45;
 
 /// Volume, output, settings and help, with a column between each.
-const CONTROLS_W: u16 = 24 + 1 + 20 + 1 + 5 + 1 + 5;
+const CONTROLS_W: u16 = VOLUME_W + 1 + OUTPUT_W + 1 + ICON_BUTTON_W + 1 + ICON_BUTTON_W;
+const VOLUME_W: u16 = 27;
+/// The volume slider's length inside its box.
+const VOLUME_SLIDER: u16 = 16;
+const OUTPUT_W: u16 = 22;
+/// A button with just an icon. Icons draw about two cells wide in Nerd Fonts, so the inside
+/// is an even four cells and the icon sits in the middle two.
+const ICON_BUTTON_W: u16 = 6;
 
 /// Where everything goes on a screen this size.
 struct Areas {
@@ -120,10 +127,10 @@ fn layout(area: Rect, browse: f32) -> Areas {
     }
     let header = area.height >= 34 && w >= CONTROLS_W;
     if header {
-        let help = Rect::new(x + w - 5, top, 5, 3);
-        let settings = Rect::new(help.x - 6, top, 5, 3);
-        let output = Rect::new(settings.x - 21, top, 20, 3);
-        a.volume = Some(Rect::new(output.x - 25, top, 24, 3));
+        let help = Rect::new(x + w - ICON_BUTTON_W, top, ICON_BUTTON_W, 3);
+        let settings = Rect::new(help.x - ICON_BUTTON_W - 1, top, ICON_BUTTON_W, 3);
+        let output = Rect::new(settings.x - OUTPUT_W - 1, top, OUTPUT_W, 3);
+        a.volume = Some(Rect::new(output.x - VOLUME_W - 1, top, VOLUME_W, 3));
         a.output = Some(output);
         a.settings = Some(settings);
         a.help = Some(help);
@@ -184,29 +191,31 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
     }
     if let Some(r) = a.volume {
         draw_volume(buf, r, player.status.volume, t);
-        hit(Rect::new(r.x + 4, r.y, 13, r.height), Target::Volume);
+        hit(
+            Rect::new(r.x + 4, r.y, VOLUME_SLIDER, r.height),
+            Target::Volume,
+        );
     }
     if let Some(r) = a.output {
-        let label = match &player.output {
-            crate::player::Output::Sonos(group) => {
-                format!("{I_VOLUME}  {} ▾", fit(&group.name(), 13))
-            }
-            crate::player::Output::Here(_) => {
-                format!(
-                    "{I_HEADPHONES}  {} ▾",
-                    fit(&device_name(&player.status), 13)
-                )
-            }
+        // The icon on the left; the output's name and the ▾ against the right.
+        let (icon, name) = match &player.output {
+            crate::player::Output::Sonos(group) => (I_VOLUME, group.name()),
+            crate::player::Output::Here(_) => (I_HEADPHONES, device_name(&player.status)),
         };
-        button(buf, r, &label, t.selection, t.light);
+        button(buf, r, "", t.selection, t.light);
+        let y = r.y + 1;
+        put(buf, r, r.x + 2, y, icon, fg(t.light));
+        let room = r.width.saturating_sub(10);
+        let label = format!("{} ▾", fit(&name, room));
+        put_right(buf, r, r.right() - 3, y, &label, fg(t.light));
         hit(r, Target::Output);
     }
     if let Some(r) = a.settings {
-        button(buf, r, I_GEAR, t.selection, t.light);
+        button(buf, r, &format!("{I_GEAR} "), t.selection, t.light);
         hit(r, Target::Settings);
     }
     if let Some(r) = a.help {
-        button(buf, r, I_HELP, t.selection, t.light);
+        button(buf, r, &format!("{I_HELP} "), t.selection, t.light);
         hit(r, Target::Help);
     }
     if let Some(r) = a.now {
@@ -224,7 +233,7 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
         draw_hints(buf, r, app, t);
     }
     if let Some(r) = a.footer {
-        draw_footer(buf, r, app, t);
+        draw_footer(buf, r, app, t, &mut hit);
     }
     match &app.overlay {
         Some(Overlay::Help) => draw_help(buf, area, t, &mut hit),
@@ -409,14 +418,10 @@ fn source_icon(source: Source, t: &Theme) -> (&'static str, Color) {
 
 /// "FLAC" from "/music/…/01 Song.flac".
 fn codec(t: &Track) -> String {
-    match t.source {
-        Source::Local => std::path::Path::new(&t.path)
-            .extension()
-            .map(|e| e.to_string_lossy().to_uppercase())
-            .unwrap_or_default(),
-        Source::Spotify => "SPOTIFY".into(),
-        Source::YouTube => "YOUTUBE".into(),
-    }
+    std::path::Path::new(&t.path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_uppercase())
+        .unwrap_or_default()
 }
 
 /// The output's short name: "Schiit Modi+" rather than "Schiit Modi+ Analog Stereo".
@@ -500,7 +505,7 @@ fn draw_volume(buf: &mut Buffer, r: Rect, volume: f64, t: &Theme) {
         I_VOLUME
     };
     put(buf, r, x, y, icon, fg(t.fg));
-    slider(buf, r, x + 2, y, 13, volume / 100.0, t);
+    slider(buf, r, x + 2, y, VOLUME_SLIDER, volume / 100.0, t);
     put_right(
         buf,
         r,
@@ -591,25 +596,20 @@ fn draw_now_playing(
                 put(buf, inner, x, inner.y + 2, tip, fg(t.dim));
             }
         }
-        if w >= 25 {
+        // Four buttons the same size and look.
+        let step = ICON_BUTTON_W + 1;
+        if w >= 4 * step - 1 {
             let y = inner.y + 5;
+            let play = if playing { I_PAUSE } else { I_PLAY };
             let buttons = [
-                (Rect::new(x, y, 5, 3), I_STOP, Target::Stop),
-                (Rect::new(x + 6, y, 5, 3), I_PREV, Target::Previous),
-                (
-                    Rect::new(x + 12, y, 7, 3),
-                    if playing { I_PAUSE } else { I_PLAY },
-                    Target::PlayPause,
-                ),
-                (Rect::new(x + 20, y, 5, 3), I_NEXT, Target::Next),
+                (I_STOP, Target::Stop),
+                (I_PREV, Target::Previous),
+                (play, Target::PlayPause),
+                (I_NEXT, Target::Next),
             ];
-            for (area, icon, target) in buttons {
-                let (border, color) = if target == Target::PlayPause {
-                    (t.accent, t.bright)
-                } else {
-                    (t.selection, t.light)
-                };
-                button(buf, area, icon, border, color);
+            for (i, (icon, target)) in buttons.into_iter().enumerate() {
+                let area = Rect::new(x + i as u16 * step, y, ICON_BUTTON_W, 3);
+                button(buf, area, &format!("{icon} "), t.selection, t.light);
                 hit(area, target);
             }
         }
@@ -671,8 +671,24 @@ fn draw_now_playing(
     }
 }
 
+/// What a stream is coming in as: "LOSSLESS 16b-44k", "OPUS 141 kbps", "AAC 256 kbps".
+fn quality_label(q: &Quality) -> String {
+    let format = short_format(q.bit_depth, q.sample_rate);
+    let label = if q.lossless {
+        format!("LOSSLESS {format}")
+    } else if let Some(kbps) = q.kbps {
+        format!("{} {kbps} kbps", q.codec)
+    } else if !q.codec.is_empty() {
+        format!("{} {format}", q.codec)
+    } else {
+        q.level.clone()
+    };
+    label.trim().to_string()
+}
+
 /// " FLAC 24b-96k " at the pane's top right. When the output runs at another rate (PipeWire
-/// resampling), that rate follows in yellow: " → 48k ".
+/// resampling), that rate follows in yellow: " → 48k ". For a stream, what it's coming in as
+/// (" OPUS 141 kbps "), or nothing until that's known.
 fn draw_badge(
     buf: &mut Buffer,
     clip: Rect,
@@ -682,10 +698,19 @@ fn draw_badge(
     st: &Status,
     t: &Theme,
 ) {
-    let format = short_format(track.bit_depth, track.sample_rate);
-    let main = format!(" {} ", [codec(track), format].join(" ").trim());
+    let main = if track.source == Source::Local {
+        let format = short_format(track.bit_depth, track.sample_rate);
+        format!(" {} ", [codec(track), format].join(" ").trim())
+    } else {
+        match st.quality.as_ref().map(quality_label) {
+            Some(label) if !label.is_empty() => format!(" {label} "),
+            _ => return,
+        }
+    };
     let resampled = match (track.sample_rate, st.sample_rate) {
-        (Some(file), Some(out)) if file != out && !st.idle => format!("→ {}k ", out / 1000),
+        (Some(file), Some(out)) if file != out && !st.idle && track.source == Source::Local => {
+            format!("→ {}k ", out / 1000)
+        }
         _ => String::new(),
     };
     let x = (right + 1).saturating_sub(width(&main) + width(&resampled));
@@ -1084,34 +1109,34 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
     hints(buf, r, r.x + 2, r.y, pairs, t);
 }
 
-/// News on the left, the design's credit on the right.
-fn draw_footer(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
-    let version = format!("[v{}]", env!("CARGO_PKG_VERSION"));
-    let credit = [
-        (version.as_str(), bold(t.fg)),
-        (" Designed with ", fg(t.dim)),
-        ("OTIS", bold(t.light)),
-        (" · ", fg(t.dim)),
-        (
-            "https://github.com/WolfBrandon/otis",
-            fg(t.fg).add_modifier(Modifier::UNDERLINED),
-        ),
-    ];
-    let status_w = width(&app.status) + 4;
-    let full: u16 = credit.iter().map(|(s, _)| width(s)).sum();
-    let short: u16 = credit[..3].iter().map(|(s, _)| width(s)).sum();
-    let shown = if r.width >= status_w + full {
-        &credit[..]
-    } else if r.width >= status_w + short {
-        &credit[..3]
-    } else {
-        &credit[..0]
-    };
-    let mut x = r
-        .right()
-        .saturating_sub(shown.iter().map(|(s, _)| width(s)).sum());
-    for (s, style) in shown {
-        x = put(buf, r, x, r.y, s, *style);
+/// News on the left; the version and the design's credit on the right, where "OTIS" is a
+/// link to its repository.
+fn draw_footer(
+    buf: &mut Buffer,
+    r: Rect,
+    app: &App,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    let version = format!("[v{}] ", env!("CARGO_PKG_VERSION"));
+    let credit = "Designed with ";
+    let full = width(&version) + width(credit) + width("OTIS");
+    if r.width >= width(&app.status) + 4 + full {
+        let x = r.right() - full;
+        let x = put(buf, r, x, r.y, &version, bold(t.fg));
+        let x = put(buf, r, x, r.y, credit, fg(t.dim));
+        put(
+            buf,
+            r,
+            x,
+            r.y,
+            "OTIS",
+            bold(t.accent).add_modifier(Modifier::UNDERLINED),
+        );
+        hit(
+            Rect::new(x, r.y, 4, 1),
+            Target::Link(crate::connect::Link::Otis),
+        );
     }
     put(buf, r, r.x + 2, r.y, &app.status, fg(t.accent));
 }
@@ -1504,9 +1529,28 @@ mod tests {
                     Target::Seek,
                     Target::Queue(1),
                     Target::Save,
+                    Target::Link(crate::connect::Link::Otis),
                 ] {
                     assert!(hits.iter().any(|h| h.target == target), "no {target:?}");
                 }
+                assert!(
+                    !text.contains("github.com"),
+                    "the footer shows no address\n{text}"
+                );
+                let area = |target: Target| hits.iter().find(|h| h.target == target).unwrap().area;
+                // The four playback buttons are the same size; so are Settings and Help.
+                let sizes: Vec<(u16, u16)> = [
+                    Target::Stop,
+                    Target::Previous,
+                    Target::PlayPause,
+                    Target::Next,
+                ]
+                .map(|t| (area(t).width, area(t).height))
+                .to_vec();
+                assert!(sizes.iter().all(|s| *s == (ICON_BUTTON_W, 3)), "{sizes:?}");
+                assert_eq!(area(Target::Settings).width, area(Target::Help).width);
+                // Clicking the volume maps onto the bar as drawn.
+                assert_eq!(area(Target::Volume).width, VOLUME_SLIDER);
             }
             key(&mut app, KeyCode::Char('b'));
             frame(&app, 0.5);

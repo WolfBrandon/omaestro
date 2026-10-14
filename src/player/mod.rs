@@ -81,6 +81,34 @@ pub struct Status {
     /// Getting the current song ready (a YouTube lookup, a conversion for Sonos): what.
     pub preparing: Option<String>,
     pub last_error: Option<String>,
+    /// How a streamed song (YouTube, Spotify) is coming in, when known.
+    pub quality: Option<Quality>,
+}
+
+/// A stream's quality, for the badge in Now Playing: "OPUS 141 kbps", "LOSSLESS 16b-44k".
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Quality {
+    /// "AAC", "OPUS", "VORBIS", "FLAC"… (see `codec_name`).
+    pub codec: String,
+    /// Kilobits per second.
+    pub kbps: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub sample_rate: Option<u32>,
+    pub lossless: bool,
+    /// The service's own word for it when that's all there is ("VERY HIGH").
+    pub level: String,
+}
+
+/// A codec's everyday name: "mp4a.40.2" → "AAC", "opus" → "OPUS".
+pub fn codec_name(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.starts_with("mp4a") || lower.contains("aac") {
+        "AAC".into()
+    } else if lower.contains("vorbis") || lower == "ogg" {
+        "VORBIS".into()
+    } else {
+        raw.to_uppercase()
+    }
 }
 
 /// The saved playlist the queue came from or was saved as.
@@ -411,6 +439,7 @@ impl Player {
         self.status.duration = track.duration_ms as f64 / 1000.0;
         self.status.preparing = None;
         self.status.sample_rate = None;
+        self.status.quality = None;
         self.anchor = None;
         self.waiting = None;
 
@@ -769,6 +798,12 @@ impl Player {
 
     fn play_stream(&mut self, stream: &youtube::Stream, start: f64) -> Result<()> {
         self.status.preparing = None;
+        self.status.quality = Some(Quality {
+            codec: codec_name(&stream.codec),
+            kbps: stream.bitrate,
+            sample_rate: stream.sample_rate,
+            ..Quality::default()
+        });
         self.mpv.set("user-agent", json!(stream.user_agent))?;
         self.loading = Some(stream.url.clone());
         self.mpv.load_replace_at(&stream.url, start)?;
@@ -953,6 +988,9 @@ impl Player {
                 if let Some(d) = s.duration_ms.filter(|d| *d > 0.0) {
                     self.status.duration = d / 1000.0;
                 }
+                if s.quality.is_some() {
+                    self.status.quality = s.quality;
+                }
                 if let Some(status) = &s.status {
                     self.status.paused = status == "paused" || status == "idle";
                     // Stopped at the very end: the song finished.
@@ -1010,6 +1048,20 @@ impl Player {
                 self.status.position = position;
                 if duration > 0.0 {
                     self.status.duration = duration;
+                }
+                // A YouTube song plays on Sonos from an AAC copy here: its size says its rate.
+                if self.status.quality.is_none()
+                    && let Some(track) = self.current().filter(|t| t.source == Source::YouTube)
+                    && let Ok(meta) =
+                        std::fs::metadata(crate::sonos::server::youtube_file(&track.uri))
+                    && track.duration_ms > 0
+                {
+                    let kbps = meta.len() * 8 / track.duration_ms as u64;
+                    self.status.quality = Some(Quality {
+                        codec: "AAC".into(),
+                        kbps: Some(kbps as u32),
+                        ..Quality::default()
+                    });
                 }
                 self.anchor = (state == "PLAYING").then(|| (position, Instant::now()));
             }

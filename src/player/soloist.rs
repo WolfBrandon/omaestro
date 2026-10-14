@@ -26,6 +26,8 @@ pub struct State {
     pub at_ms: Option<f64>,
     pub speed: Option<f64>,
     pub volume: Option<u8>,
+    /// The stream's quality, if the message says.
+    pub quality: Option<super::Quality>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +48,7 @@ pub fn parse(text: &str) -> Option<Event> {
         s.uri = item["uri"].as_str().map(str::to_string);
         s.duration_ms = item["decorations"]["playback"]["duration_ms"].as_f64();
     };
+    s.quality = quality_in(&v);
     let position = |s: &mut State, p: &Value| {
         s.position_ms = p["position_ms"].as_f64();
         s.at_ms = p["timestamp_ms"].as_f64();
@@ -71,6 +74,70 @@ pub fn parse(text: &str) -> Option<Event> {
         _ => return None,
     }
     Some(Event::State(s))
+}
+
+/// Soloist's word for the stream's quality. Its exact shape isn't documented, so this looks
+/// anywhere in a message for an object with fields like "codec", "bitrate", "bit_depth",
+/// "sample_rate", "hifi" or "audio_quality".
+fn quality_in(v: &Value) -> Option<super::Quality> {
+    const KEYS: [&str; 7] = [
+        "codec",
+        "bitrate",
+        "bit_depth",
+        "sample_rate",
+        "hifi",
+        "lossless",
+        "audio_quality",
+    ];
+    match v {
+        Value::Object(map) => {
+            if KEYS.iter().any(|k| map.contains_key(*k))
+                && let Some(q) = quality_from(map)
+            {
+                return Some(q);
+            }
+            map.values().find_map(quality_in)
+        }
+        Value::Array(list) => list.iter().find_map(quality_in),
+        _ => None,
+    }
+}
+
+fn quality_from(map: &serde_json::Map<String, Value>) -> Option<super::Quality> {
+    let text = |k: &str| {
+        map.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let number = |k: &str| map.get(k).and_then(Value::as_f64).filter(|n| *n > 0.0);
+    let flag = |k: &str| map.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let codec = match text("codec") {
+        c if c.is_empty() => text("format"),
+        c => c,
+    };
+    let level = text("audio_quality").replace('_', " ").to_uppercase();
+    let q = super::Quality {
+        lossless: flag("hifi")
+            || flag("lossless")
+            || codec.to_lowercase().contains("flac")
+            || level.contains("LOSSLESS")
+            || level.contains("HIFI"),
+        codec: super::codec_name(&codec),
+        // Bits or kilobits per second, whichever it sent.
+        kbps: number("bitrate").map(|b| if b >= 10_000.0 { b / 1000.0 } else { b }.round() as u32),
+        bit_depth: number("bit_depth").map(|b| b as u8),
+        sample_rate: number("sample_rate").map(|r| if r < 1000.0 { r * 1000.0 } else { r } as u32),
+        level,
+    };
+    (q != super::Quality::default()).then_some(q)
+}
+
+/// A copy of Soloist's latest report on the song, for checking what it says.
+fn keep_copy(text: &str) {
+    if text.contains("\"playback_state\"") || text.contains("\"track_changed\"") {
+        let _ = std::fs::write(crate::config::cache_dir().join("soloist-last.json"), text);
+    }
 }
 
 /// The running Soloist and the line to it.
@@ -179,6 +246,7 @@ fn run(mut socket: WebSocket<TcpStream>, commands: Receiver<Value>, events: impl
         }
         match socket.read() {
             Ok(Message::Text(text)) => {
+                keep_copy(&text);
                 if let Some(event) = parse(&text) {
                     events(event);
                 }
@@ -238,5 +306,35 @@ mod tests {
             None
         );
         assert_eq!(parse("not json"), None);
+
+        // Quality, wherever and however it's given.
+        let lossless = r#"{"type":"track_changed","item":{"uri":"spotify:track:A",
+            "audio":{"codec":"flac","bit_depth":16,"sample_rate":44100}}}"#;
+        let Some(Event::State(s)) = parse(lossless) else {
+            panic!()
+        };
+        let q = s.quality.unwrap();
+        assert!(q.lossless && q.codec == "FLAC");
+        assert_eq!((q.bit_depth, q.sample_rate), (Some(16), Some(44100)));
+        let lossy = r#"{"type":"track_changed","item":{"uri":"spotify:track:A"},
+            "format":{"codec":"ogg_vorbis","bitrate":320000}}"#;
+        let Some(Event::State(s)) = parse(lossy) else {
+            panic!()
+        };
+        let q = s.quality.unwrap();
+        assert_eq!(
+            (q.codec.as_str(), q.kbps, q.lossless),
+            ("VORBIS", Some(320), false)
+        );
+        let words = r#"{"type":"playback_state","status":"playing","audio_quality":"very_high"}"#;
+        let Some(Event::State(s)) = parse(words) else {
+            panic!()
+        };
+        assert_eq!(s.quality.unwrap().level, "VERY HIGH");
+        let none = r#"{"type":"playback_changed","status":"paused"}"#;
+        let Some(Event::State(s)) = parse(none) else {
+            panic!()
+        };
+        assert_eq!(s.quality, None);
     }
 }

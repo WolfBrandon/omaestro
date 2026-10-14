@@ -81,6 +81,12 @@ button. In foot, Ctrl+Shift+O also picks out links on screen.
    sudo ufw allow from 192.168.1.0/24 to any port 47100 proto tcp comment 'OMAESTRO for Sonos'
    ```
    Spotify on Sonos needs Spotify linked in the Sonos app; it doesn't need the firewall line.
+   Sonos plays Spotify songs from Spotify itself, and the link has to name your Spotify
+   account the way Sonos numbers it. Newer Sonos software (18.x) won't list accounts, so
+   OMAESTRO finds the number on Spotify songs the Sonos app has already put on a speaker
+   (a queue, a Sonos playlist or a favourite) and remembers it in
+   `~/.cache/omaestro/sonos-spotify-account`. If it can't find one, play any Spotify song
+   once from the Sonos app, in any room.
 
 ## Keys
 
@@ -175,6 +181,9 @@ changed in each one is in [CHANGELOG.md](CHANGELOG.md); ideas for later are in
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, downloaded by OMAESTRO.
 - `~/.cache/omaestro/sonos/`: songs converted or downloaded for Sonos, cleared after a week.
 - `~/.cache/omaestro/sonos.log`: every command that changed something on a speaker.
+- `~/.cache/omaestro/sonos-spotify-account`: Sonos's number for your Spotify account.
+- `~/.cache/omaestro/soloist-last.json`: Soloist's latest report on the song playing, kept
+  for checking what it says about stream quality.
 - `$XDG_RUNTIME_DIR/omaestro/mpv.sock`: OMAESTRO's control line to mpv while it runs.
 
 ## Measured on the WolfMusic NAS (117,707 tracks)

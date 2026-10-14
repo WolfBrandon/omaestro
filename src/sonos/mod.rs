@@ -44,6 +44,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &["GetGroupVolume", "SetGroupVolume", "SnapshotGroupVolume"],
     ),
     ("ZoneGroupTopology", &["GetZoneGroupState"]),
+    // Reading the speakers' queues, playlists and favourites (to find the Spotify account).
+    ("ContentDirectory", &["Browse"]),
 ];
 
 /// Links a speaker may be told to play.
@@ -75,7 +77,7 @@ impl std::fmt::Display for Refused {
 impl std::error::Error for Refused {}
 
 fn is_read(action: &str) -> bool {
-    action.starts_with("Get")
+    action.starts_with("Get") || action == "Browse"
 }
 
 /// The safety rule. Pure, so it's tested on its own (see the tests at the bottom).
@@ -278,6 +280,7 @@ fn control_path(service: &str) -> &'static str {
         "GroupRenderingControl" => "/MediaRenderer/GroupRenderingControl/Control",
         "RenderingControl" => "/MediaRenderer/RenderingControl/Control",
         "ZoneGroupTopology" => "/ZoneGroupTopology/Control",
+        "ContentDirectory" => "/MediaServer/ContentDirectory/Control",
         _ => "/",
     }
 }
@@ -559,22 +562,113 @@ impl Sonos {
         })
     }
 
-    /// The Spotify account numbers Sonos needs in a Spotify link, from the speaker's own list
-    /// of linked accounts (`/status/accounts`). Returns (service type, account serial).
-    pub fn spotify_account(&self) -> Option<(u32, u32)> {
-        let ip = self.household.groups.first()?.coordinator.ip.clone();
-        let mut res = http()
-            .get(&format!("http://{ip}:{PORT}/status/accounts"))
+    /// The Spotify account linked in the Sonos app, which a Spotify link for Sonos has to name.
+    /// Older Sonos software lists linked accounts (`/status/accounts`); newer software (18.x)
+    /// leaves that list empty, so OMAESTRO reads the account from Spotify songs the Sonos app
+    /// already put on the speakers: each group's queue, then Sonos playlists and favourites.
+    /// What it finds is remembered, so a cleared queue later doesn't matter.
+    pub fn spotify_account(&self) -> Option<SpotifyAccount> {
+        let saved = std::fs::read_to_string(account_file()).ok();
+        if let Some(account) = saved.as_deref().and_then(SpotifyAccount::from_line) {
+            return Some(account);
+        }
+        let found = self.find_spotify_account()?;
+        let _ = std::fs::write(account_file(), found.to_line());
+        Some(found)
+    }
+
+    fn find_spotify_account(&self) -> Option<SpotifyAccount> {
+        let coordinators: Vec<&Speaker> = self
+            .household
+            .groups
+            .iter()
+            .map(|g| &g.coordinator)
+            .collect();
+        let first = coordinators.first()?;
+        let listed = http()
+            .get(&format!("http://{}:{PORT}/status/accounts", first.ip))
             .call()
-            .ok()?;
-        let text = res.body_mut().read_to_string().ok()?;
-        spotify_account_in(&text)
+            .ok()
+            .and_then(|mut res| res.body_mut().read_to_string().ok());
+        if let Some(account) = listed.as_deref().and_then(spotify_account_in) {
+            return Some(account);
+        }
+        let browse = |uuid: &str, id: &str| {
+            self.send(
+                uuid,
+                "ContentDirectory",
+                "Browse",
+                &[
+                    ("ObjectID", id.into()),
+                    ("BrowseFlag", "BrowseDirectChildren".into()),
+                    ("Filter", "*".into()),
+                    ("StartingIndex", "0".into()),
+                    ("RequestedCount", "200".into()),
+                    ("SortCriteria", String::new()),
+                ],
+            )
+            .ok()
+        };
+        coordinators
+            .iter()
+            .find_map(|c| browse(&c.uuid, "Q:0").and_then(|xml| spotify_account_in_links(&xml)))
+            .or_else(|| {
+                ["SQ:", "FV:2"].iter().find_map(|id| {
+                    browse(&first.uuid, id).and_then(|x| spotify_account_in_links(&x))
+                })
+            })
     }
 }
 
-/// Finds the Spotify account in a `/status/accounts` page: Spotify's service type is 2311
-/// (or 3079 for Spotify US).
-fn spotify_account_in(text: &str) -> Option<(u32, u32)> {
+/// Where the Spotify account Sonos uses is remembered.
+fn account_file() -> std::path::PathBuf {
+    crate::config::cache_dir().join("sonos-spotify-account")
+}
+
+/// Forgets the remembered Spotify account, after Sonos turned a Spotify link down, so the
+/// next try looks again (the account may have been linked again in the Sonos app).
+pub fn forget_spotify_account() {
+    let _ = std::fs::remove_file(account_file());
+}
+
+/// Sonos's numbers for the Spotify account linked in the Sonos app, as they appear in its
+/// Spotify links: "x-sonos-spotify:spotify%3atrack%3a…?sid=12&flags=8232&sn=2".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpotifyAccount {
+    /// The music service's number: 12 for Spotify (9 in some countries).
+    pub sid: u32,
+    /// Which linked account.
+    pub sn: u32,
+    pub flags: u32,
+}
+
+/// The flags Sonos's own app puts on a Spotify song (Sonos 18.8).
+const SPOTIFY_TRACK_FLAGS: u32 = 8232;
+
+impl SpotifyAccount {
+    /// The service type in Sonos's account tokens: sid 12 → 3079.
+    fn kind(self) -> u32 {
+        self.sid * 256 + 7
+    }
+
+    /// "12 2 8232", as remembered.
+    fn to_line(self) -> String {
+        format!("{} {} {}", self.sid, self.sn, self.flags)
+    }
+
+    fn from_line(line: &str) -> Option<SpotifyAccount> {
+        let mut n = line.split_whitespace().map(|w| w.parse::<u32>().ok());
+        Some(SpotifyAccount {
+            sid: n.next()??,
+            sn: n.next()??,
+            flags: n.next()??,
+        })
+    }
+}
+
+/// Finds the Spotify account in a `/status/accounts` page (older Sonos software): Spotify's
+/// service type is 2311 or 3079.
+fn spotify_account_in(text: &str) -> Option<SpotifyAccount> {
     tags(text, "Account").into_iter().find_map(|tag| {
         let kind: u32 = attr(tag, "Type")?.parse().ok()?;
         if kind != 2311 && kind != 3079 {
@@ -583,8 +677,44 @@ fn spotify_account_in(text: &str) -> Option<(u32, u32)> {
         let serial = attr(tag, "SerialNum")
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        Some((kind, serial))
+        Some(SpotifyAccount {
+            sid: (kind - 7) / 256,
+            sn: serial,
+            flags: 8224,
+        })
     })
+}
+
+/// Finds the Spotify account in the links of a queue, playlist or favourites list: a Spotify
+/// song ("x-sonos-spotify:…") or a Spotify album or playlist ("x-rincon-cpcontainer:…spotify…").
+fn spotify_account_in_links(xml: &str) -> Option<SpotifyAccount> {
+    // The list is XML inside XML (and favourites go one level deeper).
+    let text = unescape(&unescape(&unescape(xml)));
+    text.split(|c: char| c == '<' || c == '>' || c == '"' || c.is_whitespace())
+        .find_map(|link| {
+            let song = link.starts_with("x-sonos-spotify:");
+            let list = link.starts_with("x-rincon-cpcontainer:") && link.contains("spotify");
+            if !song && !list {
+                return None;
+            }
+            let (_, query) = link.split_once('?')?;
+            let number = |key: &str| {
+                query.split('&').find_map(|pair| {
+                    let (k, v) = pair.split_once('=')?;
+                    (k == key).then(|| v.parse::<u32>().ok())?
+                })
+            };
+            Some(SpotifyAccount {
+                sid: number("sid")?,
+                sn: number("sn")?,
+                // A list's flags aren't a song's.
+                flags: if song {
+                    number("flags").unwrap_or(SPOTIFY_TRACK_FLAGS)
+                } else {
+                    SPOTIFY_TRACK_FLAGS
+                },
+            })
+        })
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -653,18 +783,27 @@ pub fn didl_http(
 }
 
 /// A Spotify track's link and details for Sonos, which streams it from Spotify itself with
-/// the account linked in the Sonos app. `account` is (service type, serial).
-pub fn spotify_link(uri: &str, title: &str, account: (u32, u32)) -> (String, String) {
-    let (kind, serial) = account;
-    let sid = (kind - 7) / 256;
+/// the account linked in the Sonos app. Made the way the Sonos app makes them.
+pub fn spotify_link(
+    uri: &str,
+    title: &str,
+    artist: &str,
+    album: &str,
+    account: SpotifyAccount,
+) -> (String, String) {
+    let SpotifyAccount { sid, sn, flags } = account;
+    let kind = account.kind();
     let encoded = uri.replace(':', "%3a");
-    let link = format!("x-sonos-spotify:{encoded}?sid={sid}&flags=8224&sn={serial}");
+    let link = format!("x-sonos-spotify:{encoded}?sid={sid}&flags={flags}&sn={sn}");
     let meta = format!(
-        "{DIDL_OPEN}<item id=\"00032020{encoded}\" parentID=\"-1\" restricted=\"true\">\
-         <dc:title>{}</dc:title><upnp:class>object.item.audioItem.musicTrack</upnp:class>\
+        "{DIDL_OPEN}<item id=\"1003{flags:04x}{encoded}\" parentID=\"-1\" restricted=\"true\">\
+         <dc:title>{}</dc:title><dc:creator>{}</dc:creator><upnp:album>{}</upnp:album>\
+         <upnp:class>object.item.audioItem.musicTrack</upnp:class>\
          <desc id=\"cdudn\" nameSpace=\"urn:schemas-rinconnetworks-com:metadata-1-0/\">\
          SA_RINCON{kind}_X_#Svc{kind}-0-Token</desc></item></DIDL-Lite>",
-        escape(title)
+        escape(title),
+        escape(artist),
+        escape(album)
     );
     (link, meta)
 }
@@ -756,6 +895,11 @@ mod tests {
         ] {
             assert!(ok("DeviceProperties", action, ARC, None).is_err());
         }
+        // Reading lists (Browse) is fine anywhere but a bonded speaker.
+        assert!(permit("ContentDirectory", "Browse", To::Address, None, &[]).is_ok());
+        assert!(ok("ContentDirectory", "Browse", DINING, None).is_ok());
+        assert!(ok("ContentDirectory", "Browse", OFFICE_BONDED[0], None).is_err());
+        assert!(ok("ContentDirectory", "DestroyObject", DINING, None).is_err());
         // Joining a group by link: refused.
         let join = format!("x-rincon:{DINING}");
         assert!(ok("AVTransport", "SetAVTransportURI", ARC, Some(&join)).is_err());
@@ -825,14 +969,26 @@ mod tests {
         }
         println!("{} bonded speakers", h.bonded.len());
         assert!(h.group(ARC).is_some());
+        // Reads only: the accounts page and the lists (Browse), never anything that plays.
+        let sonos = Sonos {
+            household: h,
+            never: Vec::new(),
+        };
+        println!("Spotify on Sonos: {:?}", sonos.find_spotify_account());
     }
 
     #[test]
     fn spotify_links_and_track_details() {
+        // Older Sonos software lists the accounts.
+        let accounts = r#"<ZPSupportInfo><Accounts><Account Type="519" SerialNum="3"/><Account Type="2311" SerialNum="1" Deleted="0"/></Accounts></ZPSupportInfo>"#;
+        let old = spotify_account_in(accounts).unwrap();
+        assert_eq!((old.sid, old.sn, old.flags), (9, 1, 8224));
         let (link, meta) = spotify_link(
             "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
             "Rick & Roll",
-            (2311, 1),
+            "Rick",
+            "Hits",
+            old,
         );
         assert_eq!(
             link,
@@ -840,8 +996,50 @@ mod tests {
         );
         assert!(meta.contains("SA_RINCON2311_X_#Svc2311-0-Token"));
         assert!(meta.contains("Rick &amp; Roll"));
-        let accounts = r#"<ZPSupportInfo><Accounts><Account Type="519" SerialNum="3"/><Account Type="3079" SerialNum="2" Deleted="0"/></Accounts></ZPSupportInfo>"#;
-        assert_eq!(spotify_account_in(accounts), Some((3079, 2)));
+
+        // Sonos 18.8 lists nothing (read from the speakers on 2026-10-13)...
+        let empty = r#"<?xml version="1.0" ?><ZPSupportInfo></ZPSupportInfo>"#;
+        assert_eq!(spotify_account_in(empty), None);
+        // ...but the Dining Room's queue holds songs the Sonos app added: a Browse reply, with
+        // the song's link in it and again, encoded, in its picture's address.
+        let queue = "<s:Envelope><s:Body><u:BrowseResponse><Result>&lt;DIDL-Lite&gt;&lt;item id=&quot;Q:0/1&quot; parentID=&quot;Q:0&quot; restricted=&quot;true&quot;&gt;&lt;res protocolInfo=&quot;sonos.com-spotify:*:audio/x-spotify:*&quot; duration=&quot;0:04:03&quot;&gt;x-sonos-spotify:spotify%3atrack%3a0eX5QY6o5cb9W72zVmWWjV?sid=12&amp;amp;flags=8232&amp;amp;sn=2&lt;/res&gt;&lt;upnp:albumArtURI&gt;/getaa?s=1&amp;amp;u=x-sonos-spotify%3aspotify%253atrack%253a0eX5QY6o5cb9W72zVmWWjV%3fsid%3d12%26flags%3d8232%26sn%3d2&lt;/upnp:albumArtURI&gt;&lt;dc:title&gt;The Power of Equality&lt;/dc:title&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</Result><NumberReturned>1</NumberReturned></u:BrowseResponse></s:Body></s:Envelope>";
+        let found = spotify_account_in_links(queue).unwrap();
+        assert_eq!(
+            found,
+            SpotifyAccount {
+                sid: 12,
+                sn: 2,
+                flags: 8232
+            }
+        );
+        assert_eq!(SpotifyAccount::from_line(&found.to_line()), Some(found));
+        let (link, meta) = spotify_link(
+            "spotify:track:26q6YTrXt9l8qshIveiTX9",
+            "Rebirth",
+            "",
+            "",
+            found,
+        );
+        assert_eq!(
+            link,
+            "x-sonos-spotify:spotify%3atrack%3a26q6YTrXt9l8qshIveiTX9?sid=12&flags=8232&sn=2"
+        );
+        // As in the Sonos app's own favourite of the same song.
+        assert!(meta.contains("id=\"10032028spotify%3atrack%3a26q6YTrXt9l8qshIveiTX9\""));
+        assert!(meta.contains("SA_RINCON3079_X_#Svc3079-0-Token"));
+        // Other services' lists, and queues without Spotify, don't count.
+        let other =
+            "x-rincon-cpcontainer:10062e6cplaylist%3a17151827?sid=31&amp;flags=11884&amp;sn=9";
+        assert_eq!(spotify_account_in_links(other), None);
+        let playlist = "&lt;res&gt;x-rincon-cpcontainer:1006206cspotify%3aplaylist%3aABC?sid=12&amp;amp;flags=8300&amp;amp;sn=2&lt;/res&gt;";
+        assert_eq!(
+            spotify_account_in_links(playlist),
+            Some(SpotifyAccount {
+                sid: 12,
+                sn: 2,
+                flags: 8232
+            })
+        );
         let didl = didl_http(
             "A < B",
             "Artist",

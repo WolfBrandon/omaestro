@@ -49,10 +49,13 @@ pub enum Link {
     /// The Spotify sign-in page itself, while OMAESTRO waits for it.
     SignIn,
     YouTube,
+    /// OTIS, which the screens were designed in (the footer's credit).
+    Otis,
 }
 
 pub const DASHBOARD: &str = "https://developer.spotify.com/dashboard";
 pub const YOUTUBE: &str = "https://music.youtube.com";
+pub const OTIS: &str = "https://github.com/WolfBrandon/otis";
 
 impl Link {
     /// The address, given the Spotify step showing (for the sign-in page).
@@ -62,6 +65,7 @@ impl Link {
             Link::Redirect => spotify::REDIRECT_URI.to_string(),
             Link::SoloistKeys => soloist::KEY_PAGE.to_string(),
             Link::YouTube => YOUTUBE.to_string(),
+            Link::Otis => OTIS.to_string(),
             Link::SignIn => match step {
                 Some(SpotifyStep::Waiting { url }) => url.clone(),
                 _ => return None,
@@ -228,6 +232,7 @@ mod tests {
             Some("http://127.0.0.1:8898/callback")
         );
         assert_eq!(Link::Dashboard.url(None).as_deref(), Some(DASHBOARD));
+        assert_eq!(Link::Otis.url(None).as_deref(), Some(OTIS));
         assert_eq!(
             Link::SignIn.url(None),
             None,

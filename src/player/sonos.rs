@@ -111,7 +111,6 @@ fn run(
     events: impl Fn(Event),
 ) {
     let mut playing: Option<Playing> = None;
-    let mut spotify_account = None;
     let mut last_poll = Instant::now();
     loop {
         let wait = if playing.is_some() {
@@ -132,15 +131,7 @@ fn run(
                             start,
                         } => {
                             playing = None;
-                            match start_song(
-                                sonos,
-                                server,
-                                &mut spotify_account,
-                                &track,
-                                &group,
-                                ticket,
-                                &events,
-                            ) {
+                            match start_song(sonos, server, &track, &group, ticket, &events) {
                                 Ok(link) => {
                                     if start > 1.0 {
                                         let _ = sonos.seek(&group, start);
@@ -280,7 +271,6 @@ fn same_link(reported: &str, ours: &str) -> bool {
 fn start_song(
     sonos: &Sonos,
     server: &server::Server,
-    spotify_account: &mut Option<(u32, u32)>,
     track: &Track,
     group: &Group,
     ticket: u64,
@@ -330,16 +320,28 @@ fn start_song(
             (url, meta)
         }
         Source::Spotify => {
-            if spotify_account.is_none() {
-                *spotify_account = sonos.spotify_account();
-            }
-            let Some(account) = *spotify_account else {
-                bail!("Spotify isn't linked in the Sonos app, so Sonos can't play Spotify songs");
+            let Some(account) = sonos.spotify_account() else {
+                bail!(
+                    "OMAESTRO can't find your Spotify account on Sonos yet. Play any Spotify \
+                     song once from the Sonos app (any room), then try again"
+                );
             };
-            sonos::spotify_link(&track.uri, &track.title, account)
+            sonos::spotify_link(
+                &track.uri,
+                &track.title,
+                &track.artist,
+                &track.album,
+                account,
+            )
         }
     };
-    sonos.play_uri(group, &link, &metadata)?;
+    if let Err(e) = sonos.play_uri(group, &link, &metadata) {
+        if track.source == Source::Spotify {
+            // Maybe Spotify was linked again in the Sonos app: look for the account afresh.
+            sonos::forget_spotify_account();
+        }
+        return Err(e);
+    }
     Ok(link)
 }
 

@@ -3,6 +3,25 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.3.0 — 2026-10-13
+
+- **Fix: Spotify on Sonos.**
+  - The problem: newer Sonos software (18.x) no longer lists the accounts linked in the
+    Sonos app, so OMAESTRO wrongly said Spotify wasn't linked.
+  - The fix: it now reads the account from Spotify songs the Sonos app already put on the
+    speakers (a queue, a Sonos playlist or a favourite), and remembers it.
+  - Spotify links are now made exactly the way the Sonos app makes them.
+- **Stream quality in Now Playing.** Spotify and YouTube songs show how they're coming in,
+  e.g. "OPUS 141 kbps", "AAC 256 kbps" or "LOSSLESS 16b-44k", instead of "SPOTIFY" or
+  "YOUTUBE". Nothing shows until that's known.
+- The footer's **OTIS** is a link to its repository (click it); the address itself is gone.
+- **Buttons.**
+  - The four playback buttons are the same size and look; play/pause is no longer
+    highlighted.
+  - Icons sit in the middle of their buttons, including Settings and Help.
+  - The output button has its icon on the left and the name and ▾ on the right.
+  - The volume slider is about 25% longer.
+
 ## 0.2.0 — 2026-10-13
 
 - **An app of its own.** `./install.sh` adds OMAESTRO to the app launcher (Super+Space), with
