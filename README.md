@@ -201,6 +201,12 @@ queue.
 `Enter` plays a song now (the queue carries on after it), `a` adds it, `A` adds everything that
 provider found.
 
+**Several at once, in the browser and Search:** as in the queue, `Shift+↑`/`↓` (or
+`Shift+Home`/`End`) selects, `Ctrl+A` selects the whole list, `Ctrl+click` adds or drops one
+and `Alt+click` selects up to the one clicked. Then `a` or `Enter` adds them all to the queue
+together. In the browser's results that can be artists and albums too; a song picked twice
+that way (an artist and one of their albums) is added once. `Esc` lets go.
+
 ## Configuration
 
 Most settings are in the app. They're saved in `~/.config/omaestro/config.toml`:

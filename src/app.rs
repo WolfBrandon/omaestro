@@ -1070,6 +1070,7 @@ impl App {
     /// Searches every shown source for the current words. Local answers at once; the online
     /// services a moment later, on their own threads.
     pub fn run_search(&mut self) -> Result<()> {
+        self.search.picks.clear();
         let generation = self.search.generation + 1;
         self.search.generation = generation;
         self.latest_search.store(generation, Ordering::Relaxed);
@@ -1626,6 +1627,8 @@ impl App {
                 result,
             } => {
                 if generation == self.search.generation {
+                    // The rows below move as these arrive, so what was picked is let go.
+                    self.search.picks.clear();
                     self.search.found[search::index(source)] = match result {
                         Ok((songs, total)) => Found::Songs(songs, total),
                         Err(e) => Found::Failed(e),
@@ -1832,7 +1835,10 @@ impl App {
             return Ok(None);
         }
         if self.browse_open {
-            match self.browse.on_key(key, &self.catalog, &self.db)? {
+            let before = self.browse.picked_count();
+            let step = self.browse.on_key(key, &self.catalog, &self.db)?;
+            self.say_list_picked(before, self.browse.picked_count());
+            match step {
                 Step::Stay => return Ok(None),
                 Step::Close => {
                     self.close_browse();
@@ -1875,19 +1881,9 @@ impl App {
 
     fn queue_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Option<Action> {
         // Shift+↑↓ (and Page Up/Down, Home, End) selects songs from the highlight on.
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        let arrows = matches!(
-            key.code,
-            KeyCode::Up
-                | KeyCode::Down
-                | KeyCode::PageUp
-                | KeyCode::PageDown
-                | KeyCode::Home
-                | KeyCode::End
-        );
         if let Some(delta) = movement(key.code) {
             let to = step(self.queue_sel, ctx.queue.len(), delta);
-            if shift && arrows {
+            if crate::browse::selecting(&key) {
                 self.pick_range(to, ctx);
             } else {
                 self.picks.rows.clear();
@@ -2060,6 +2056,37 @@ impl App {
         self.say_picked();
     }
 
+    /// A plain click in the browser lets go of what's picked.
+    fn browse_let_go(&mut self) {
+        self.say_list_picked(self.browse.picked_count(), 0);
+        self.browse.picks.clear();
+        self.browse.song_picks.clear();
+    }
+
+    /// A double-click in the browser does what Enter does.
+    fn browse_double(&mut self, double: bool) -> Result<Option<Action>> {
+        if !double {
+            return Ok(None);
+        }
+        Ok(match self.browse.enter(&self.db)? {
+            Step::Do(action) => Some(action),
+            _ => None,
+        })
+    }
+
+    /// Says how many songs (or artists and albums) are picked in Browse or Search, and what
+    /// to do with them; once they're let go, says nothing.
+    fn say_list_picked(&mut self, before: usize, now: usize) {
+        if now == before {
+            return;
+        }
+        if now > 1 {
+            self.status = format!("{now} selected: a or ⏎ adds them to the queue, Esc lets go");
+        } else if before > 1 {
+            self.status.clear();
+        }
+    }
+
     fn say_picked(&mut self) {
         let n = self.picks.rows.len();
         if n > 1 {
@@ -2211,12 +2238,25 @@ impl App {
                     _ => {}
                 }
             }
-            Overlay::Search => match self.search.on_key(key) {
-                search::Outcome::Stay => {}
-                search::Outcome::Close => self.overlay = None,
-                search::Outcome::Changed => self.run_search()?,
-                search::Outcome::Do(action) => return Ok(Some(action)),
-            },
+            Overlay::Search => {
+                let before = self.search.picks.len();
+                let action = match self.search.on_key(key) {
+                    search::Outcome::Stay => None,
+                    search::Outcome::Close => {
+                        self.overlay = None;
+                        None
+                    }
+                    search::Outcome::Changed => {
+                        self.run_search()?;
+                        None
+                    }
+                    search::Outcome::Do(action) => Some(action),
+                };
+                self.say_list_picked(before, self.search.picks.len());
+                if action.is_some() {
+                    return Ok(action);
+                }
+            }
             Overlay::Settings(_) => {
                 let rows = settings::rows(&self.config, &self.facts());
                 let before = self.config.library_paths.clone();
@@ -2423,6 +2463,9 @@ impl App {
                 None
             }
             Target::Queue(i) => {
+                if !self.picked(ctx.revision, ctx.queue.len()).is_empty() {
+                    self.status.clear();
+                }
                 self.picks.rows.clear();
                 self.queue_sel = i;
                 double.then_some(Action::Jump(i))
@@ -2444,21 +2487,50 @@ impl App {
                 self.browse.toggle(kind, &self.catalog, &self.db)?;
                 None
             }
+            // In Browse and Search, as in the queue: Ctrl+click picks one, Alt+click picks up
+            // to it, and a plain click lets go.
+            Target::Result(i) | Target::Song(i) | Target::SearchRow(i)
+                if self.pressed_with.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
+                ) =>
+            {
+                let one = self.pressed_with.contains(KeyModifiers::CONTROL);
+                let before = self.browse.picked_count() + self.search.picks.len();
+                match target {
+                    Target::Result(_) => {
+                        self.browse.pane = Pane::Results;
+                        if one {
+                            self.browse.toggle_result(i, &self.db)?;
+                        } else {
+                            self.browse.range_to_result(i, &self.db)?;
+                        }
+                    }
+                    Target::Song(_) => {
+                        self.browse.pane = Pane::Songs;
+                        if one {
+                            self.browse.toggle_song(i);
+                        } else {
+                            self.browse.range_to_song(i);
+                        }
+                    }
+                    _ if one => self.search.toggle_pick(i),
+                    _ => self.search.pick_range(self.search.sel, i),
+                }
+                let now = self.browse.picked_count() + self.search.picks.len();
+                self.say_list_picked(before, now);
+                None
+            }
             Target::Result(i) => {
                 self.browse.pane = Pane::Results;
+                self.browse_let_go();
                 self.browse.select(i, &self.db)?;
-                match double.then(|| self.browse.enter()) {
-                    Some(Step::Do(action)) => Some(action),
-                    _ => None,
-                }
+                self.browse_double(double)?
             }
             Target::Song(i) => {
                 self.browse.pane = Pane::Songs;
+                self.browse_let_go();
                 self.browse.track_sel = i;
-                match double.then(|| self.browse.enter()) {
-                    Some(Step::Do(action)) => Some(action),
-                    _ => None,
-                }
+                self.browse_double(double)?
             }
             Target::Device(i) => {
                 let all = matches!(self.overlay, Some(Overlay::Picker { all: true, .. }));
@@ -2516,6 +2588,8 @@ impl App {
                 None
             }
             Target::SearchRow(i) => {
+                self.say_list_picked(self.search.picks.len(), 0);
+                self.search.picks.clear();
                 self.search.select(i);
                 double
                     .then(|| self.search.selected())
@@ -3603,6 +3677,96 @@ pub mod tests {
 
     /// Ctrl+click picks songs one by one (with the highlighted one), Alt+click picks a run,
     /// a plain click lets go, and dragging a selected song takes the others along.
+    /// In Browse and Search as in the queue: Ctrl+click picks one, Alt+click picks up to it,
+    /// a plain click lets go; the status line says what to do with them.
+    #[test]
+    fn browse_and_search_rows_are_picked_with_the_mouse() {
+        let tmp = TempDir::new("app-pick-lists");
+        let mut app = app(&tmp);
+        let ctx = Ctx {
+            queue: &[],
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+            revision: 0,
+        };
+        let (ctrl, alt) = (KeyModifiers::CONTROL, KeyModifiers::ALT);
+        let titles = |action: Option<Action>| match action {
+            Some(Action::Enqueue(tracks)) => {
+                tracks.iter().map(|t| t.title.clone()).collect::<Vec<_>>()
+            }
+            other => panic!("{other:?}"),
+        };
+
+        // Search: Local's heading, then four songs on rows 1 to 4.
+        let songs: Vec<Track> = ["a", "b", "c", "d"]
+            .map(|t| Track {
+                title: t.into(),
+                ..Track::default()
+            })
+            .to_vec();
+        app.overlay = Some(Overlay::Search);
+        app.search.show = [true, false, false];
+        app.search.found[0] = search::Found::Songs(songs, 4);
+        app.search.typing = false;
+        app.search.settle();
+        let hits: Vec<Hit> = (1..=4)
+            .map(|i| Hit {
+                area: Rect::new(0, 10 + i, 80, 1),
+                target: Target::SearchRow(i as usize),
+            })
+            .collect();
+        click_with(&mut app, ctrl, 13, &hits, &ctx);
+        assert_eq!(app.search.picks.len(), 2, "c, and a that was highlighted");
+        assert!(app.status.starts_with("2 selected"), "{}", app.status);
+        click_with(&mut app, alt, 14, &hits, &ctx);
+        assert_eq!(
+            titles(press(&mut app, KeyCode::Char('a'), &ctx)),
+            ["c", "d"]
+        );
+        click_with(&mut app, ctrl, 11, &hits, &ctx);
+        click_with(&mut app, ctrl, 12, &hits, &ctx);
+        click(&mut app, 5, 13, &hits, &ctx);
+        assert!(app.search.picks.is_empty(), "a plain click lets go");
+        assert!(app.status.is_empty());
+
+        // Browse: Abba and Zappa on rows 1 and 2, then their songs.
+        app.overlay = None;
+        app.open_browse();
+        app.browse.refresh(&app.catalog, &app.db).unwrap();
+        let hits: Vec<Hit> = [1, 2]
+            .map(|i| Hit {
+                area: Rect::new(0, 10 + i as u16, 40, 1),
+                target: Target::Result(i),
+            })
+            .into_iter()
+            .chain((0..2).map(|i| Hit {
+                area: Rect::new(40, 10 + i as u16, 40, 1),
+                target: Target::Song(i),
+            }))
+            .collect();
+        click_with(&mut app, ctrl, 12, &hits, &ctx);
+        assert_eq!(app.browse.picks.len(), 2);
+        assert_eq!(
+            titles(press(&mut app, KeyCode::Enter, &ctx)),
+            ["Dancing Queen", "Knowing Me", "Cosmik Debris", "Peaches"]
+        );
+        // Picking songs lets go of the results picked.
+        click_with(&mut app, ctrl, 12, &hits, &ctx);
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            mouse_with(&mut app, kind, alt, (45, 11), &hits, &ctx);
+        }
+        assert!(app.browse.picks.is_empty());
+        assert_eq!(app.browse.song_picks.len(), 2);
+        assert_eq!(
+            titles(press(&mut app, KeyCode::Char('a'), &ctx)),
+            ["Cosmik Debris", "Peaches"]
+        );
+    }
+
     #[test]
     fn several_queue_songs_can_be_selected_with_the_mouse() {
         let tmp = TempDir::new("app-pick-mouse");

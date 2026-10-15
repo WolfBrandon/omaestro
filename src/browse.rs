@@ -10,6 +10,7 @@ use crate::library::{Album, Db, Track};
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::cell::Cell;
+use std::collections::{BTreeSet, HashSet};
 
 /// While more than one kind is shown, each group lists only its best matches; the toggles
 /// show a whole group.
@@ -84,6 +85,64 @@ pub enum Step {
     Ignored,
 }
 
+/// Rows picked with Shift+↑↓, Ctrl+A or Ctrl+click, to add to the queue together. They're let
+/// go when the list changes under them.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Selection {
+    pub rows: BTreeSet<usize>,
+    /// Where a Shift range starts.
+    anchor: usize,
+}
+
+impl Selection {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn contains(&self, row: usize) -> bool {
+        self.rows.contains(&row)
+    }
+
+    pub fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    /// Picks every row from where the selection started (`from`, the highlight, when nothing
+    /// is picked yet) to `to`, leaving out the rows `pickable` says no to (headings, gaps).
+    pub fn range(&mut self, from: usize, to: usize, pickable: impl Fn(usize) -> bool) {
+        if self.rows.is_empty() {
+            self.anchor = from;
+        }
+        let (a, b) = (self.anchor.min(to), self.anchor.max(to));
+        self.rows = (a..=b).filter(|&i| pickable(i)).collect();
+    }
+
+    /// Picks a row or lets it go (Ctrl+click). The first one picks `here`, the highlighted
+    /// row, too.
+    pub fn toggle(&mut self, here: Option<usize>, row: usize) {
+        if self.rows.is_empty()
+            && let Some(here) = here
+            && here != row
+        {
+            self.rows.insert(here);
+        }
+        if !self.rows.remove(&row) {
+            self.rows.insert(row);
+        }
+        self.anchor = row;
+    }
+
+    /// Picks all of `rows` (Ctrl+A).
+    pub fn all(&mut self, rows: impl IntoIterator<Item = usize>) {
+        self.rows = rows.into_iter().collect();
+        self.anchor = self.rows.first().copied().unwrap_or(0);
+    }
+}
+
 /// Which result is selected, so it stays selected when the list is rebuilt.
 #[derive(Debug, Clone, PartialEq)]
 enum Picked {
@@ -144,6 +203,9 @@ pub struct Browse {
     /// The list holds one artist's albums, so each song's album is worth showing.
     pub tracks_by_artist: bool,
     pub track_sel: usize,
+    /// Results and songs picked to add together. Picking in one list lets go of the other.
+    pub picks: Selection,
+    pub song_picks: Selection,
     /// First row shown in each list; kept by the screen code as the selection moves.
     pub results_top: Cell<usize>,
     pub tracks_top: Cell<usize>,
@@ -165,6 +227,8 @@ impl Default for Browse {
             tracks_title: String::new(),
             tracks_by_artist: false,
             track_sel: 0,
+            picks: Selection::default(),
+            song_picks: Selection::default(),
             results_top: Cell::new(0),
             tracks_top: Cell::new(0),
             loaded: None,
@@ -183,6 +247,7 @@ impl Browse {
         let grouped = kinds_on > 1 && !words.is_empty();
         let cap = |n: usize| if grouped { n.min(GROUPED_CAP) } else { n };
 
+        self.picks.clear();
         self.rows.clear();
         let mut gap = false;
         for kind in Kind::ALL {
@@ -296,6 +361,7 @@ impl Browse {
         };
         if source != self.loaded {
             self.loaded = source.clone();
+            self.song_picks.clear();
             self.track_sel = 0;
             self.tracks_top.set(0);
             match &source {
@@ -333,18 +399,43 @@ impl Browse {
     /// Enter or a double-click: adds the song (or album) to the end of the queue without
     /// playing it. The browser never replaces the queue, so an open playlist is safe. On an
     /// artist it goes to their songs instead.
-    pub fn enter(&mut self) -> Step {
-        if self.pane != Pane::Songs && matches!(self.selected(), Some(Row::Artist(_))) {
+    pub fn enter(&mut self, db: &Db) -> Result<Step> {
+        if self.pane != Pane::Songs
+            && self.picked_count() == 0
+            && matches!(self.selected(), Some(Row::Artist(_)))
+        {
             self.pane = Pane::Songs;
-            return Step::Stay;
+            return Ok(Step::Stay);
         }
-        self.add()
+        self.add(db)
     }
 
     /// What `a`, Enter and a double-click add: the highlighted song in the song list, or the
-    /// song or album picked in the results (an artist's whole catalogue with `a`).
-    fn add(&self) -> Step {
-        let tracks = if self.pane == Pane::Songs {
+    /// song or album picked in the results (an artist's whole catalogue with `a`). With
+    /// several picked, all of them, each song once, whichever list has the focus.
+    fn add(&mut self, db: &Db) -> Result<Step> {
+        let tracks = if !self.song_picks.is_empty() {
+            let rows = std::mem::take(&mut self.song_picks.rows);
+            rows.iter()
+                .filter_map(|&i| self.tracks.get(i))
+                .cloned()
+                .collect()
+        } else if !self.picks.is_empty() {
+            let mut tracks = Vec::new();
+            for &i in &self.picks.rows {
+                match self.rows.get(i) {
+                    Some(Row::Artist(n)) => tracks.extend(db.tracks_by(&self.artists[*n])?),
+                    Some(Row::Album(n)) => tracks.extend(db.tracks_in(&self.albums[*n].dir)?),
+                    Some(Row::Song(n)) => tracks.extend(self.songs.get(*n).cloned()),
+                    _ => {}
+                }
+            }
+            // An artist and one of their albums: their songs once.
+            let mut seen = HashSet::new();
+            tracks.retain(|t| seen.insert(t.id));
+            self.picks.clear();
+            tracks
+        } else if self.pane == Pane::Songs {
             self.tracks
                 .get(self.track_sel)
                 .cloned()
@@ -353,10 +444,67 @@ impl Browse {
         } else {
             self.tracks_for_selected()
         };
-        if tracks.is_empty() {
+        Ok(if tracks.is_empty() {
             Step::Stay
         } else {
             Step::Do(Action::Enqueue(tracks))
+        })
+    }
+
+    /// How many results or songs are picked (in one list or the other, never both).
+    pub fn picked_count(&self) -> usize {
+        self.picks.len() + self.song_picks.len()
+    }
+
+    /// Picks from the highlighted result to `to` (Shift+↑↓, Alt+click).
+    fn pick_results(&mut self, from: usize, to: usize) {
+        self.song_picks.clear();
+        let rows = &self.rows;
+        self.picks
+            .range(from, to, |i| rows.get(i).is_some_and(Row::selectable));
+    }
+
+    /// Picks from the highlighted song to `to`.
+    fn pick_songs(&mut self, from: usize, to: usize) {
+        self.picks.clear();
+        self.song_picks.range(from, to, |_| true);
+    }
+
+    /// A Ctrl+click on a result: picks it or lets it go, and highlights it.
+    pub fn toggle_result(&mut self, row: usize, db: &Db) -> Result<()> {
+        if !self.rows.get(row).is_some_and(Row::selectable) {
+            return Ok(());
+        }
+        self.song_picks.clear();
+        let here = self.selected().is_some().then_some(self.sel);
+        self.picks.toggle(here, row);
+        self.select(row, db)
+    }
+
+    /// An Alt+click on a result: picks every result from the highlight to it.
+    pub fn range_to_result(&mut self, row: usize, db: &Db) -> Result<()> {
+        if !self.rows.get(row).is_some_and(Row::selectable) {
+            return Ok(());
+        }
+        self.pick_results(self.sel, row);
+        self.select(row, db)
+    }
+
+    /// A Ctrl+click on a song in the song list.
+    pub fn toggle_song(&mut self, i: usize) {
+        if i < self.tracks.len() {
+            self.picks.clear();
+            let here = (self.track_sel < self.tracks.len()).then_some(self.track_sel);
+            self.song_picks.toggle(here, i);
+            self.track_sel = i;
+        }
+    }
+
+    /// An Alt+click on a song in the song list.
+    pub fn range_to_song(&mut self, i: usize) {
+        if i < self.tracks.len() {
+            self.pick_songs(self.track_sel, i);
+            self.track_sel = i;
         }
     }
 
@@ -409,18 +557,56 @@ impl Browse {
         if self.pane == Pane::Search {
             return self.search_key(key, catalog, db);
         }
+        let shift = selecting(&key);
         if let Some(delta) = movement(key.code) {
             match self.pane {
-                Pane::Results if delta < 0 && key.code == KeyCode::Up && self.first_selected() => {
+                Pane::Results
+                    if !shift && delta < 0 && key.code == KeyCode::Up && self.first_selected() =>
+                {
                     self.pane = Pane::Search
                 }
-                Pane::Results => self.move_results(delta, db)?,
-                _ => self.track_sel = step(self.track_sel, self.tracks.len(), delta),
+                Pane::Results => {
+                    let from = self.sel;
+                    self.move_results(delta, db)?;
+                    if shift {
+                        self.pick_results(from, self.sel);
+                    } else {
+                        self.picks.clear();
+                    }
+                }
+                _ => {
+                    let from = self.track_sel;
+                    self.track_sel = step(self.track_sel, self.tracks.len(), delta);
+                    if shift && !self.tracks.is_empty() {
+                        self.pick_songs(from, self.track_sel);
+                    } else {
+                        self.song_picks.clear();
+                    }
+                }
             }
             return Ok(Step::Stay);
         }
         let on_songs = self.pane == Pane::Songs;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         Ok(match key.code {
+            // Esc lets go of what's picked first.
+            KeyCode::Esc if self.picked_count() > 0 => {
+                self.picks.clear();
+                self.song_picks.clear();
+                Step::Stay
+            }
+            KeyCode::Char('a') if ctrl => {
+                if on_songs {
+                    self.picks.clear();
+                    self.song_picks.all(0..self.tracks.len());
+                } else {
+                    self.song_picks.clear();
+                    let rows = &self.rows;
+                    self.picks
+                        .all((0..rows.len()).filter(|&i| rows[i].selectable()));
+                }
+                Step::Stay
+            }
             KeyCode::Esc | KeyCode::Char('b') => Step::Close,
             KeyCode::Char('/') => {
                 self.pane = Pane::Search;
@@ -451,8 +637,8 @@ impl Browse {
                 self.toggle(kind, catalog, db)?;
                 Step::Stay
             }
-            KeyCode::Enter => self.enter(),
-            KeyCode::Char('a') => self.add(),
+            KeyCode::Enter => self.enter(db)?,
+            KeyCode::Char('a') => self.add(db)?,
             _ => Step::Ignored,
         })
     }
@@ -494,6 +680,21 @@ pub fn movement(code: KeyCode) -> Option<isize> {
         KeyCode::End | KeyCode::Char('G') => Some(isize::MAX),
         _ => None,
     }
+}
+
+/// Shift with ↑↓, Page Up/Down, Home or End: picks rows as the highlight moves. (`G` comes
+/// with Shift too, but it only moves.)
+pub fn selecting(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(
+            key.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+        )
 }
 
 /// Moves a selection by `delta`, staying inside a list of `len` rows.
@@ -662,6 +863,88 @@ mod tests {
             press(&mut b, &catalog, &db, KeyCode::Char('b')),
             Step::Close
         );
+    }
+
+    /// Shift+↑↓ picks results (past headings) or songs; a or ⏎ adds them all, each song
+    /// once; Esc lets go before it closes.
+    #[test]
+    fn several_results_or_songs_are_picked_and_added_together() {
+        let tmp = TempDir::new("browse-picks");
+        let db = sample_library(&tmp.0);
+        let catalog = Catalog::load(&db).unwrap();
+        let mut b = Browse::default();
+        b.refresh(&catalog, &db).unwrap();
+        b.pane = Pane::Results;
+        let with = |b: &mut Browse, code: KeyCode, modifiers: KeyModifiers| {
+            b.on_key(KeyEvent::new(code, modifiers), &catalog, &db)
+                .unwrap()
+        };
+        let shift = KeyModifiers::SHIFT;
+
+        with(&mut b, KeyCode::Up, shift);
+        assert_eq!(b.pane, Pane::Results, "Shift+↑ at the top stays put");
+        with(&mut b, KeyCode::Down, shift);
+        with(&mut b, KeyCode::Down, shift);
+        assert_eq!(
+            b.selected(),
+            Some(&Row::Album(0)),
+            "past the gap and heading"
+        );
+        assert_eq!(b.picks.len(), 3, "Abba, Zappa and Gold");
+        // Gold is Abba's, so its songs come once.
+        match press(&mut b, &catalog, &db, KeyCode::Char('a')) {
+            Step::Do(Action::Enqueue(tracks)) => assert_eq!(
+                titles(&tracks),
+                ["Dancing Queen", "Knowing Me", "Cosmik Debris", "Peaches"]
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert!(b.picks.is_empty(), "let go once added");
+
+        // What's picked is added wherever the focus has gone.
+        with(&mut b, KeyCode::Up, shift);
+        press(&mut b, &catalog, &db, KeyCode::Tab);
+        assert_eq!(b.pane, Pane::Songs);
+        match press(&mut b, &catalog, &db, KeyCode::Enter) {
+            Step::Do(Action::Enqueue(tracks)) => assert_eq!(
+                titles(&tracks),
+                ["Cosmik Debris", "Peaches", "Dancing Queen", "Knowing Me"]
+            ),
+            other => panic!("{other:?}"),
+        }
+        press(&mut b, &catalog, &db, KeyCode::BackTab);
+        assert_eq!(b.pane, Pane::Results);
+
+        // A plain move lets go; so does a new search.
+        with(&mut b, KeyCode::Up, shift);
+        assert_eq!(b.picks.len(), 2);
+        press(&mut b, &catalog, &db, KeyCode::Down);
+        assert!(b.picks.is_empty());
+        with(&mut b, KeyCode::Up, shift);
+        press(&mut b, &catalog, &db, KeyCode::Char('/'));
+        typed(&mut b, &catalog, &db, "z");
+        assert!(b.picks.is_empty());
+
+        // In the songs: Ctrl+A picks them all, G (with Shift) only moves, Esc lets go and
+        // only then closes.
+        press(&mut b, &catalog, &db, KeyCode::Tab);
+        press(&mut b, &catalog, &db, KeyCode::Right);
+        assert_eq!(b.pane, Pane::Songs);
+        with(&mut b, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(b.song_picks.len(), 2);
+        with(&mut b, KeyCode::Char('G'), shift);
+        assert!(b.song_picks.is_empty());
+        with(&mut b, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(press(&mut b, &catalog, &db, KeyCode::Esc), Step::Stay);
+        assert!(b.song_picks.is_empty());
+        with(&mut b, KeyCode::Up, shift);
+        match press(&mut b, &catalog, &db, KeyCode::Enter) {
+            Step::Do(Action::Enqueue(tracks)) => {
+                assert_eq!(titles(&tracks), ["Cosmik Debris", "Peaches"])
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(press(&mut b, &catalog, &db, KeyCode::Esc), Step::Close);
     }
 
     #[test]

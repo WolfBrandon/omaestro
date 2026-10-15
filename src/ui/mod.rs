@@ -1205,6 +1205,7 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
             ],
             Pane::Results => &[
                 ("⏎", "add to queue"),
+                ("⇧↑↓", "select"),
                 ("^Z", "undo"),
                 ("1 2 3", "filters"),
                 ("/", "search"),
@@ -1213,6 +1214,7 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
             ],
             Pane::Songs => &[
                 ("⏎", "add to queue"),
+                ("⇧↑↓", "select"),
                 ("^Z", "undo"),
                 ("Tab", "next pane"),
                 ("b", "close"),
@@ -1503,6 +1505,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("Tab", "Next pane: search, results, songs"),
         ("1 2 3", "Show or hide artists, albums, songs"),
         ("⏎  a", "Add to the queue (never replaces it)"),
+        ("⇧↑↓  ^A", "Select several to add; in Search (/) too"),
         ("Esc  b", "Close"),
         ("", ""),
         ("Mouse", "Click buttons and rows, double-click plays"),
@@ -1899,7 +1902,7 @@ mod tests {
         };
         let which = std::env::var("OMAESTRO_PREVIEW").unwrap_or_else(|_| "browse".into());
         match which.as_str() {
-            "search" => {
+            "search" | "search-picked" => {
                 app.search.show = [true, false, false];
                 keys(&mut app, "/black keys");
                 app.on_key(KeyEvent::from(KeyCode::Enter), &ctx).unwrap();
@@ -1986,6 +1989,19 @@ mod tests {
             _ => {
                 keys(&mut app, "bblack keys");
                 app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
+            }
+        }
+        // "search-picked", "browse-picked", "songs-picked": three rows picked with Shift+↓.
+        if which.ends_with("-picked") {
+            if which == "songs-picked" {
+                app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
+            }
+            for _ in 0..2 {
+                let down = KeyEvent::new(
+                    KeyCode::Down,
+                    ratatui::crossterm::event::KeyModifiers::SHIFT,
+                );
+                app.on_key(down, &ctx).unwrap();
             }
         }
         let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();

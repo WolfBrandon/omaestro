@@ -105,9 +105,12 @@ fn draw_search(
         hit(Rect::new(start, y, x - start, 1), Target::Toggle(kind));
         x += 1;
     }
-    let note = "1 2 3 toggle";
-    if x + 2 + width(note) <= p.right().saturating_sub(2) {
-        put_right(buf, p, p.right() - 3, y, note, fg(t.dim));
+    let note = match b.picks.len() {
+        0 => "1 2 3 toggle".to_string(),
+        n => format!("{n} selected"),
+    };
+    if x + 2 + width(&note) <= p.right().saturating_sub(2) {
+        put_right(buf, p, p.right() - 3, y, &note, fg(t.dim));
     }
 
     let list = Rect::new(p.x, p.y + 6, p.width, p.height.saturating_sub(6));
@@ -159,13 +162,19 @@ fn draw_results(
             hit(Rect::new(list.x, y, list.width, 1), Target::Result(i));
         }
         let selected = i == b.sel && row.selectable();
-        if selected && focused {
+        // Picked results are lit (wherever the focus is), or else the highlight.
+        let lit = if b.picks.is_empty() {
+            selected && focused
+        } else {
+            b.picks.contains(i)
+        };
+        if lit {
             let bar = Rect::new(list.x + 1, y, list.width.saturating_sub(2), 1);
             fill(buf, bar, Style::new().bg(t.selection));
         }
-        let name = match (selected, focused) {
-            (true, true) => fg(t.bright).add_modifier(Modifier::BOLD),
-            (true, false) => fg(t.bright),
+        let name = match (lit, selected) {
+            (true, _) => fg(t.bright).add_modifier(Modifier::BOLD),
+            (false, true) => fg(t.bright),
             _ => fg(t.light),
         };
         match row {
@@ -230,7 +239,15 @@ fn draw_songs(
         put(buf, p, x0, p.y + 3, "Pick an artist, album or song", style);
         return;
     }
-    let about = format!("  {} · {}", b.tracks_title, group_thousands(b.tracks.len()));
+    let picked = match b.song_picks.len() {
+        0 => String::new(),
+        n => format!("{n} selected · "),
+    };
+    let about = format!(
+        "  {picked}{} · {}",
+        b.tracks_title,
+        group_thousands(b.tracks.len())
+    );
     put(
         buf,
         p,
@@ -272,7 +289,12 @@ fn draw_songs(
         let y = first + (i - top) as u16;
         hit(Rect::new(p.x, y, p.width, 1), Target::Song(i));
         let selected = i == b.track_sel;
-        if selected && focused {
+        let lit = if b.song_picks.is_empty() {
+            selected && focused
+        } else {
+            b.song_picks.contains(i)
+        };
+        if lit {
             let bar = Rect::new(p.x + 1, y, p.width.saturating_sub(2), 1);
             fill(buf, bar, Style::new().bg(t.selection));
         }
@@ -289,9 +311,9 @@ fn draw_songs(
             let number = track.track_no.map(|n| n.to_string()).unwrap_or_default();
             put_right(buf, p, x0 + 1, y, &number, fg(t.dim));
         }
-        let title = match (selected, focused) {
-            (true, true) => fg(t.bright).add_modifier(Modifier::BOLD),
-            (true, false) => fg(t.bright),
+        let title = match (lit, selected) {
+            (true, _) => fg(t.bright).add_modifier(Modifier::BOLD),
+            (false, true) => fg(t.bright),
             _ => fg(t.light),
         };
         put(

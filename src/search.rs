@@ -7,7 +7,7 @@
 //! search they belong to, so a slow answer to an old search is ignored.
 
 use crate::app::Action;
-use crate::browse::{movement, step};
+use crate::browse::{Selection, movement, selecting, step};
 use crate::library::{Source, Track};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::cell::Cell;
@@ -43,6 +43,8 @@ pub struct Search {
     pub found: [Found; 3],
     /// The selected row in `rows()`; a song when there is one.
     pub sel: usize,
+    /// Songs picked to add together; let go when the results change.
+    pub picks: Selection,
     pub top: Cell<usize>,
     /// Goes up with every change to the query, so late answers to older searches are dropped.
     pub generation: u64,
@@ -67,6 +69,7 @@ impl Default for Search {
             show: [true; 3],
             found: [Found::Idle, Found::Idle, Found::Idle],
             sel: 0,
+            picks: Selection::default(),
             top: Cell::new(0),
             generation: 0,
         }
@@ -149,6 +152,42 @@ impl Search {
         }
     }
 
+    /// Picks the songs from `from` to `to` (Shift+↑↓, Alt+click), and highlights `to`.
+    pub fn pick_range(&mut self, from: usize, to: usize) {
+        let rows = self.rows();
+        let song = |i: usize| matches!(rows.get(i), Some(Row::Song(..)));
+        if song(to) {
+            self.picks.range(from, to, song);
+            self.sel = to;
+            self.typing = false;
+        }
+    }
+
+    /// Picks a song or lets it go (Ctrl+click), and highlights it.
+    pub fn toggle_pick(&mut self, row: usize) {
+        let rows = self.rows();
+        let song = |i: usize| matches!(rows.get(i), Some(Row::Song(..)));
+        if song(row) {
+            self.picks.toggle(song(self.sel).then_some(self.sel), row);
+            self.sel = row;
+            self.typing = false;
+        }
+    }
+
+    /// The picked songs, in the order they're shown, and lets go of them.
+    fn take_picks(&mut self) -> Vec<Track> {
+        let rows = self.rows();
+        let songs = self
+            .picks
+            .rows
+            .iter()
+            .filter_map(|&i| rows.get(i).and_then(|r| self.song(r)))
+            .cloned()
+            .collect();
+        self.picks.clear();
+        songs
+    }
+
     /// Selects a row (a click); only songs can be selected.
     pub fn select(&mut self, row: usize) {
         if matches!(self.rows().get(row), Some(Row::Song(..))) {
@@ -205,17 +244,44 @@ impl Search {
             }
             return Outcome::Stay;
         }
+        let shift = selecting(&key);
         if let Some(delta) = movement(key.code) {
-            if key.code == KeyCode::Up
+            if !shift
+                && key.code == KeyCode::Up
                 && self.rows().iter().position(|r| matches!(r, Row::Song(..))) == Some(self.sel)
             {
                 self.typing = true;
             } else {
+                let from = self.sel;
                 self.move_by(delta);
+                if shift {
+                    self.pick_range(from, self.sel);
+                } else {
+                    self.picks.clear();
+                }
             }
             return Outcome::Stay;
         }
+        // With songs picked, ⏎ and a add them all (playing five songs "now" means nothing).
+        if !self.picks.is_empty() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.picks.clear();
+                    return Outcome::Stay;
+                }
+                KeyCode::Enter | KeyCode::Char('a') if !ctrl => {
+                    return Outcome::Do(Action::Enqueue(self.take_picks()));
+                }
+                _ => {}
+            }
+        }
         match key.code {
+            KeyCode::Char('a') if ctrl => {
+                let rows = self.rows();
+                let songs = (0..rows.len()).filter(|&i| matches!(rows[i], Row::Song(..)));
+                self.picks.all(songs);
+                Outcome::Stay
+            }
             KeyCode::Esc => Outcome::Close,
             KeyCode::Char('/') | KeyCode::BackTab => {
                 self.typing = true;
@@ -284,6 +350,48 @@ mod tests {
 
     fn press(s: &mut Search, code: KeyCode) -> Outcome {
         s.on_key(KeyEvent::from(code))
+    }
+
+    /// Shift+↑↓ picks songs across the sources; ⏎ or a adds them all; Esc lets go before it
+    /// closes.
+    #[test]
+    fn several_songs_are_picked_across_sources_and_added() {
+        let mut s = Search {
+            found: [
+                songs(Source::Local, &["a", "b"]),
+                songs(Source::Spotify, &["c"]),
+                songs(Source::YouTube, &["d"]),
+            ],
+            typing: false,
+            ..Search::default()
+        };
+        s.settle();
+        let shift = |s: &mut Search, code: KeyCode| {
+            s.on_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+        };
+        let added = |outcome: Outcome| match outcome {
+            Outcome::Do(Action::Enqueue(tracks)) => {
+                tracks.iter().map(|t| t.title.clone()).collect::<Vec<_>>()
+            }
+            other => panic!("{other:?}"),
+        };
+
+        shift(&mut s, KeyCode::Up);
+        assert!(!s.typing, "Shift+↑ on the first song stays in the results");
+        shift(&mut s, KeyCode::Down);
+        shift(&mut s, KeyCode::Down);
+        assert_eq!(s.picks.len(), 3, "a, b and c, past Spotify's heading");
+        assert_eq!(added(press(&mut s, KeyCode::Enter)), ["a", "b", "c"]);
+        assert!(s.picks.is_empty());
+
+        shift(&mut s, KeyCode::End);
+        assert_eq!(added(press(&mut s, KeyCode::Char('a'))), ["c", "d"]);
+
+        s.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(s.picks.len(), 4);
+        assert_eq!(press(&mut s, KeyCode::Esc), Outcome::Stay);
+        assert!(s.picks.is_empty());
+        assert_eq!(press(&mut s, KeyCode::Esc), Outcome::Close);
     }
 
     #[test]

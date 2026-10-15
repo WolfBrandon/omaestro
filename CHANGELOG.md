@@ -3,6 +3,21 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.14 — 2026-10-15
+
+- **Select several in the browser and Search,** to add them to the queue together.
+  - The same keys as the queue: `Shift+↑`/`↓` (or `Shift+Home`/`End`) selects, `Ctrl+A`
+    selects the whole list, `Ctrl+click` adds or drops one, `Alt+click` selects up to the
+    one clicked, and `Esc` lets go.
+  - `a` or `Enter` adds everything selected, in the order shown. In Search, `Enter` adds them
+    rather than playing them.
+  - In the browser's results, artists and albums can be selected too: all their songs are
+    added, each song once.
+  - A new search, or moving without Shift, lets go. So do Search's online results arriving,
+    as they move the rows below them.
+- **Clicking a queue song after selecting several** now clears the "N songs selected"
+  message too.
+
 ## 0.9.13 — 2026-10-15
 
 - **New playlist:** a New button, first of the four beside the playlist's name, or `Ctrl+N`.

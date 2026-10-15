@@ -341,7 +341,12 @@ pub(super) fn draw_search(
             let ry = body.y + 1 + (k - offset) as u16;
             let rowr = Rect::new(body.x, ry, body.width, 1);
             hit(rowr, Target::SearchRow(first_row + k));
-            let chosen = mine == Some(k);
+            // Picked songs are lit, or else the highlight.
+            let chosen = if s.picks.is_empty() {
+                mine == Some(k)
+            } else {
+                s.picks.contains(first_row + k)
+            };
             if chosen {
                 fill(buf, rowr, Style::new().bg(t.selection));
             }
@@ -390,11 +395,19 @@ pub(super) fn draw_search(
 
     let pairs: &[(&str, &str)] = if s.typing {
         &[("type", "to search"), ("⏎ ↓", "results"), ("Esc", "close")]
+    } else if !s.picks.is_empty() {
+        &[
+            ("⏎ a", "add the selected"),
+            ("⇧↑↓", "select"),
+            ("^click", "add or drop one"),
+            ("Esc", "let go"),
+        ]
     } else {
         &[
             ("⏎", "play"),
             ("a", "add to queue"),
             ("A", "add all"),
+            ("⇧↑↓", "select"),
             ("Tab", "provider"),
             ("Esc", "close"),
         ]
