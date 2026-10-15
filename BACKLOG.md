@@ -14,6 +14,7 @@ In the order they'll be built:
 - [x] **Several queue songs at once**: select them to remove or move together (0.9.10).
 - [x] **Star ratings**: 1 to 5 stars for any song, in the queue and File Info (0.9.11).
 - [x] **Roomier stars**: a space between each star (0.9.12).
+- [x] **New playlist**: a New button and Ctrl+N; saves a named playlist first (0.9.13).
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
 - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.

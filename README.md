@@ -185,6 +185,10 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
   already has takes it off. A rating belongs to the song, so it shows in every playlist and
   in File Info. Ratings stay in OMAESTRO; your music files are never changed.
 - `s` saves; `S`, or clicking the playlist's name, renames it right there.
+- `Ctrl+N`, or the New button (first of the four by the playlist's name), starts a new
+  playlist. If the one in the queue has a name and changes, it's saved first; then the queue
+  empties and becomes Untitled. `Ctrl+Z` brings it back. (`c` only empties the queue: it's
+  still that playlist, so `s` would save over it.)
 - `O` opens a playlist: saved ones, or your Spotify and YouTube Music playlists.
 - With the mouse: drag songs to reorder, and drag the `╎` marks in the heading row to resize
   columns. The list icon at the top left (or `C`) shows or hides columns.

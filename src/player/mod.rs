@@ -506,6 +506,29 @@ impl Player {
         self.stop()
     }
 
+    /// The playlist's name when the queue has changes to save to it. None for an untitled
+    /// queue, and for an empty one: Clear keeps the playlist, and saving that would empty it.
+    pub fn unsaved_playlist(&self) -> Option<&str> {
+        self.playlist
+            .as_ref()
+            .filter(|p| !self.queue.is_empty() && p.saved != self.revision)
+            .map(|p| p.name.as_str())
+    }
+
+    /// Starts a new, untitled playlist: empties the queue and lets go of the playlist it was,
+    /// so saving asks for a name. Returns false when the queue is new already.
+    pub fn new_playlist(&mut self) -> Result<bool> {
+        if self.queue.is_empty() && self.playlist.is_none() {
+            return Ok(false);
+        }
+        self.remember("started a new playlist".into());
+        self.queue.clear();
+        self.current = None;
+        self.playlist = None;
+        self.stop()?;
+        Ok(true)
+    }
+
     /// Puts the queue (and the playlist it was) back as before the last edit. The song playing
     /// carries on; it keeps its ▶ if it's in the restored queue. Returns what was undone, or
     /// None when there's nothing to undo.
@@ -1829,6 +1852,54 @@ mod tests {
         player.remove(0).unwrap();
         assert_eq!(player.redo().unwrap(), None);
         assert_eq!(titles(&player), ["b"]);
+    }
+
+    /// New saves nothing itself, but says when there's something to save first; it empties
+    /// the queue and lets go of the playlist, and one Ctrl+Z brings both back.
+    #[test]
+    fn a_new_playlist_starts_empty_and_untitled() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-new");
+        let (mut player, _rx) = silent(&tmp);
+        assert!(!player.new_playlist().unwrap(), "already new");
+        let mix = Named {
+            name: "Mix".into(),
+            path: tmp.0.join("Mix.jspf"),
+            saved: 0,
+        };
+        player.load(named(&["a", "b"]), Some(mix)).unwrap();
+        assert_eq!(player.unsaved_playlist(), None, "just opened");
+        player.enqueue(named(&["c"])).unwrap();
+        assert_eq!(player.unsaved_playlist(), Some("Mix"));
+        player.clear().unwrap();
+        assert_eq!(
+            player.unsaved_playlist(),
+            None,
+            "an empty queue is never saved over a playlist"
+        );
+        player.undo().unwrap();
+
+        assert!(player.new_playlist().unwrap());
+        assert!(player.queue().is_empty() && player.current().is_none());
+        assert_eq!(player.playlist, None, "untitled");
+        assert_eq!(player.unsaved_playlist(), None);
+        assert_eq!(
+            player.undo().unwrap().as_deref(),
+            Some("started a new playlist")
+        );
+        assert_eq!(titles(&player), ["a", "b", "c"]);
+        assert_eq!(
+            player.playlist.as_ref().map(|p| p.name.as_str()),
+            Some("Mix")
+        );
+
+        // After Clear the queue is still the playlist; New lets go of it.
+        player.clear().unwrap();
+        assert!(player.new_playlist().unwrap());
+        assert_eq!(player.playlist, None);
     }
 
     /// Queue edits keep the ▶ on the right song, and undo walks them back. The files don't

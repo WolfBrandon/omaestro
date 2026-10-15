@@ -3,6 +3,16 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.13 — 2026-10-15
+
+- **New playlist:** a New button, first of the four beside the playlist's name, or `Ctrl+N`.
+  - If the queue is a playlist with a name and unsaved changes, it's saved first.
+  - Then the queue empties, playing stops, and the queue is Untitled, so `s` asks for a
+    new name.
+  - `Ctrl+Z` brings back the songs and the playlist they were.
+  - Clear (`c`) is unchanged: it empties the queue but it's still the same playlist, so `s`
+    would save over it. New is the way to start afresh.
+
 ## 0.9.12 — 2026-10-15
 
 - **Stars a space apart.** The Rating column's stars were crowded together; there's now a

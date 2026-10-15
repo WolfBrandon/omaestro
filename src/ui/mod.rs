@@ -48,6 +48,7 @@ const I_YOUTUBE: &str = "\u{f16a}";
 const I_MUSIC: &str = "\u{f001}";
 const I_SEARCH: &str = "\u{f002}";
 const I_LIST: &str = "\u{f03a}";
+const I_NEW: &str = "\u{f016}";
 const I_SAVE: &str = "\u{f0c7}";
 const I_OPEN: &str = "\u{f07c}";
 const I_CLEAR: &str = "\u{f1f8}";
@@ -986,6 +987,7 @@ fn draw_queue(
         };
         let room = cr.saturating_sub(width(&summary) + 2);
         for (icon, target) in [
+            (I_NEW, Target::New),
             (I_SAVE, Target::Save),
             (I_OPEN, Target::Open),
             (I_CLEAR, Target::Clear),
@@ -1491,6 +1493,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ),
         ("1-5  0", "Rate it (or them), or click a star; 0 unrates"),
         ("^Z  ^Y", "Undo, redo the last change (anywhere)"),
+        ("^N", "Start a new playlist (saves the named one first)"),
         ("c", "Clear the queue"),
         ("s  S", "Save the playlist; rename it (or click its name)"),
         ("O", "Open a playlist (saved, Spotify, YouTube Music)"),
@@ -1657,6 +1660,7 @@ mod tests {
                     Target::Volume,
                     Target::Seek,
                     Target::Queue(1),
+                    Target::New,
                     Target::Save,
                     Target::PlaylistName,
                     Target::Version,

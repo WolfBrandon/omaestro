@@ -722,27 +722,31 @@ fn apply(
             app.status = "Queue cleared (Ctrl+Z brings it back)".into();
         }
         Action::SavePlaylist(name) => {
-            // The queue's own playlist saves over its file; a new name needs one of its own.
-            let own = player
-                .playlist
-                .as_ref()
-                .filter(|p| p.name == name)
-                .map(|p| p.path.clone());
-            let path = match own {
-                Some(path) => Ok(path),
-                None => playlist::free_file(&app.playlist_dir, &name, None),
-            };
-            match path.and_then(|path| playlist::save(&path, &name, player.queue()).map(|()| path))
+            save_playlist(app, player, name);
+        }
+        Action::NewPlaylist => {
+            // A named playlist with changes is saved first; an untitled queue can be had back
+            // with Ctrl+Z.
+            let named = player.playlist.as_ref().map(|p| p.name.clone());
+            let changed = player.unsaved_playlist().map(str::to_string);
+            if let Some(name) = changed.clone()
+                && !save_playlist(app, player, name)
             {
-                Ok(path) => {
-                    app.status = format!("Saved {name}");
-                    player.playlist = Some(player::Named {
-                        name,
-                        path,
-                        saved: player.revision,
-                    });
-                }
-                Err(e) => app.status = format!("Couldn't save {name}: {e:#}"),
+                return Ok(());
+            }
+            if player.new_playlist()? {
+                app.queue_sel = 0;
+                app.status = match (named, changed.is_some()) {
+                    (Some(name), true) => {
+                        format!("Saved {name} and started a new playlist (Ctrl+Z brings it back)")
+                    }
+                    (Some(name), false) => {
+                        format!("New playlist; {name} is still saved (Ctrl+Z brings it back)")
+                    }
+                    (None, _) => "New playlist (Ctrl+Z brings back the old queue)".into(),
+                };
+            } else {
+                app.status = "This is a new playlist already".into();
             }
         }
         Action::LoadPlaylist {
@@ -879,6 +883,35 @@ fn apply(
         Action::Quit | Action::Minimize | Action::Update => {}
     }
     Ok(())
+}
+
+/// Saves the queue as `name`: over the file of the playlist it is, or in a new file for a new
+/// name. Says how it went; false if it couldn't.
+fn save_playlist(app: &mut App, player: &mut Player, name: String) -> bool {
+    let own = player
+        .playlist
+        .as_ref()
+        .filter(|p| p.name == name)
+        .map(|p| p.path.clone());
+    let path = match own {
+        Some(path) => Ok(path),
+        None => playlist::free_file(&app.playlist_dir, &name, None),
+    };
+    match path.and_then(|path| playlist::save(&path, &name, player.queue()).map(|()| path)) {
+        Ok(path) => {
+            app.status = format!("Saved {name}");
+            player.playlist = Some(player::Named {
+                name,
+                path,
+                saved: player.revision,
+            });
+            true
+        }
+        Err(e) => {
+            app.status = format!("Couldn't save {name}: {e:#}");
+            false
+        }
+    }
 }
 
 fn plural(n: usize, word: &str) -> String {

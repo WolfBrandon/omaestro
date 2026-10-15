@@ -85,6 +85,8 @@ pub enum Action {
     Clear,
     /// Save the queue as a playlist with this name.
     SavePlaylist(String),
+    /// Save the playlist if it has a name and changes, then start a new, empty one.
+    NewPlaylist,
     /// Give the queue's playlist a new name (and its file, if it's been saved).
     RenamePlaylist(String),
     /// Put a playlist in the queue. `path` is the file for saved ones, none for imported ones;
@@ -299,6 +301,8 @@ pub enum Target {
     Output,
     Settings,
     Help,
+    /// The queue header's New, Save, Open and Clear buttons.
+    New,
     Save,
     /// The playlist's name in the queue's header: click to rename.
     PlaylistName,
@@ -1810,6 +1814,10 @@ impl App {
                 // Undo and redo work everywhere, even while typing in a search box.
                 KeyCode::Char('z') => return Ok(Some(Action::Undo)),
                 KeyCode::Char('y') => return Ok(Some(Action::Redo)),
+                // Ctrl+N: a new playlist, from the queue (not n, which plays the next song).
+                KeyCode::Char('n') if self.overlay.is_none() && !self.browse_open => {
+                    return Ok(Some(Action::NewPlaylist));
+                }
                 _ => {}
             }
         }
@@ -2386,6 +2394,7 @@ impl App {
                 self.open_playlists();
                 None
             }
+            Target::New => Some(Action::NewPlaylist),
             Target::Clear => Some(Action::Clear),
             Target::ColumnsMenu => {
                 self.overlay = Some(Overlay::Columns(0));
@@ -2945,6 +2954,20 @@ pub mod tests {
         assert_eq!(app.on_key(ctrl_z, &ctx).unwrap(), Some(Action::Undo));
         let ctrl_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
         assert_eq!(app.on_key(ctrl_y, &ctx).unwrap(), Some(Action::Redo));
+
+        // Ctrl+N starts a new playlist from the queue; n is still the next song.
+        let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.on_key(ctrl_n, &ctx).unwrap(),
+            None,
+            "not while typing a name"
+        );
+        app.overlay = None;
+        assert_eq!(app.on_key(ctrl_n, &ctx).unwrap(), Some(Action::NewPlaylist));
+        assert_eq!(
+            press(&mut app, KeyCode::Char('n'), &ctx),
+            Some(Action::Next)
+        );
     }
 
     fn path_ref(app: &App, name: &str) -> PathBuf {
