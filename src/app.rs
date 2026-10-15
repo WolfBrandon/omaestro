@@ -22,7 +22,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -286,6 +286,8 @@ pub enum Overlay {
 /// every frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Target {
+    /// A star in a queue row's rating: the row, and which star (1 to 5).
+    Star(usize, u8),
     Stop,
     Previous,
     PlayPause,
@@ -395,6 +397,13 @@ pub fn hit_at(hits: &[Hit], x: u16, y: u16) -> Option<Hit> {
         .copied()
 }
 
+/// "★★★☆☆" for 3.
+pub fn stars_text(stars: u8) -> String {
+    (1..=5)
+        .map(|n| if n <= stars { '★' } else { '☆' })
+        .collect()
+}
+
 /// How far along a slider a column is, 0 to 1.
 fn fraction(area: Rect, x: u16) -> f64 {
     let span = area.width.saturating_sub(1).max(1) as f64;
@@ -406,6 +415,8 @@ pub struct FileInfo {
     pub track: Track,
     /// How many times it's been played, and when last.
     pub played: (u64, Option<u64>),
+    /// Its stars, 0 when it isn't rated.
+    pub rating: u8,
     pub details: Option<Result<crate::fileinfo::Details, String>>,
     pub back: Option<Box<Overlay>>,
 }
@@ -486,6 +497,8 @@ pub struct App {
     lastfm_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Every play, for the lists and File Info; opened by the main program.
     pub plays: Option<crate::plays::Store>,
+    /// Every rated song's stars, by `plays::key`; read from the plays file as it opens.
+    pub ratings: HashMap<String, u8>,
     /// Sends plays to Last.fm and ListenBrainz; started by the main program.
     pub scrobbler: Option<crate::scrobble::Scrobbler>,
     /// How that's going: Last.fm, then ListenBrainz.
@@ -558,6 +571,7 @@ impl App {
             listenbrainz: crate::integrations::ListenBrainz::load(),
             lastfm_cancel: None,
             plays: None,
+            ratings: HashMap::new(),
             scrobbler: None,
             scrobbling: Default::default(),
             statuses: crate::status::Statuses::default(),
@@ -1168,9 +1182,11 @@ impl App {
             .as_ref()
             .and_then(|p| p.played(&track).ok())
             .unwrap_or((0, None));
+        let rating = self.rating(&track);
         self.overlay = Some(Overlay::FileInfo(Box::new(FileInfo {
             track,
             played,
+            rating,
             details: None,
             back,
         })));
@@ -1896,6 +1912,19 @@ impl App {
             KeyCode::Char('d') | KeyCode::Delete if many.is_some() => many.map(Action::RemoveMany),
             KeyCode::Char('K') if many.is_some() => many.map(|rows| Action::NudgeMany(rows, true)),
             KeyCode::Char('J') if many.is_some() => many.map(|rows| Action::NudgeMany(rows, false)),
+            // 1 to 5 rates the highlighted (or selected) songs; 0 takes the rating off.
+            KeyCode::Char(c @ '0'..='5') => {
+                let rows = many.unwrap_or_else(|| here.into_iter().collect());
+                let tracks: Vec<Track> = rows
+                    .iter()
+                    .filter_map(|&i| ctx.queue.get(i))
+                    .cloned()
+                    .collect();
+                if !tracks.is_empty() {
+                    self.rate(&tracks, c as u8 - b'0');
+                }
+                None
+            }
             KeyCode::Enter => here.map(Action::Jump),
             KeyCode::Char('U') => Some(Action::Update),
             KeyCode::Char('i') => {
@@ -1923,6 +1952,49 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// The plays file, and the ratings kept in it.
+    pub fn open_plays(&mut self, store: crate::plays::Store) {
+        self.ratings = store.ratings().unwrap_or_default();
+        self.plays = Some(store);
+    }
+
+    /// A song's stars, 0 when it isn't rated.
+    pub fn rating(&self, track: &Track) -> u8 {
+        self.ratings
+            .get(&crate::plays::key(track))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Gives songs 1 to 5 stars, or takes their rating off (0).
+    fn rate(&mut self, tracks: &[Track], stars: u8) {
+        let Some(store) = &self.plays else {
+            self.status = "Ratings can't be kept: the plays file didn't open".into();
+            return;
+        };
+        for track in tracks {
+            if let Err(e) = store.rate(track, stars, secrets::now_secs()) {
+                self.status = format!("Couldn't keep the rating: {e:#}");
+                return;
+            }
+            let key = crate::plays::key(track);
+            if stars == 0 {
+                self.ratings.remove(&key);
+            } else {
+                self.ratings.insert(key, stars);
+            }
+        }
+        let what = match tracks {
+            [one] => one.title.clone(),
+            many => format!("{} songs", many.len()),
+        };
+        self.status = if stars == 0 {
+            format!("Took the rating off {what}")
+        } else {
+            format!("Rated {what} {}", stars_text(stars))
+        };
     }
 
     /// The songs selected in the queue, if they still belong to it.
@@ -2344,6 +2416,15 @@ impl App {
                 self.picks.rows.clear();
                 self.queue_sel = i;
                 double.then_some(Action::Jump(i))
+            }
+            // A star sets the rating; clicking the rating it already has takes it off. (A
+            // double-click's second click does nothing, or it would take it straight off.)
+            Target::Star(i, n) => {
+                if !double && let Some(track) = ctx.queue.get(i).cloned() {
+                    let stars = if self.rating(&track) == n { 0 } else { n };
+                    self.rate(&[track], stars);
+                }
+                None
             }
             Target::BrowseSearch => {
                 self.browse.pane = Pane::Search;
@@ -3551,6 +3632,72 @@ pub mod tests {
         assert!(app.picked(3, 6).is_empty(), "a plain click lets go");
         click_with(&mut app, KeyModifiers::ALT, 12, &hits, &ctx);
         assert_eq!(app.picked(3, 6), [0, 1, 2]);
+    }
+
+    /// 1 to 5 rate the highlighted song, or all the selected ones; 0 takes it off. Clicking
+    /// a star sets it, and clicking the rating it has takes it off. Ratings are kept.
+    #[test]
+    fn songs_are_rated_with_keys_and_stars() {
+        use crate::plays::Store;
+        let tmp = TempDir::new("app-ratings");
+        let mut app = app(&tmp);
+        app.open_plays(Store::open(&tmp.0.join("plays.db")).unwrap());
+        let queue: Vec<Track> = (0..3)
+            .map(|i| Track {
+                path: format!("/music/{i}.flac"),
+                title: format!("t{i}"),
+                ..Track::default()
+            })
+            .collect();
+        let ctx = Ctx {
+            queue: &queue,
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+            revision: 1,
+        };
+        let stars = |app: &App| queue.iter().map(|t| app.rating(t)).collect::<Vec<_>>();
+
+        press(&mut app, KeyCode::Char('4'), &ctx);
+        assert_eq!(stars(&app), [4, 0, 0]);
+        assert_eq!(app.status, "Rated t0 ★★★★☆");
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &ctx)
+            .unwrap();
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &ctx)
+            .unwrap();
+        press(&mut app, KeyCode::Char('2'), &ctx);
+        assert_eq!(stars(&app), [2, 2, 2]);
+        press(&mut app, KeyCode::Esc, &ctx);
+        press(&mut app, KeyCode::Char('0'), &ctx);
+        assert_eq!(stars(&app), [2, 2, 0]);
+
+        let hits: Vec<Hit> = (1..=5)
+            .map(|n| Hit {
+                area: Rect::new(60 + n as u16, 10, 1, 1),
+                target: Target::Star(1, n),
+            })
+            .collect();
+        click(&mut app, 65, 10, &hits, &ctx);
+        assert_eq!(stars(&app), [2, 5, 0]);
+        click(&mut app, 65, 10, &hits, &ctx);
+        assert_eq!(
+            stars(&app),
+            [2, 5, 0],
+            "a double-click doesn't take it straight off"
+        );
+        app.last_click = None; // a moment later
+        click(&mut app, 65, 10, &hits, &ctx);
+        assert_eq!(
+            stars(&app),
+            [2, 0, 0],
+            "clicking its rating again takes it off"
+        );
+
+        // Kept: a new start reads them back.
+        let other = TempDir::new("app-ratings-again");
+        let mut again = self::app(&other);
+        again.open_plays(Store::open(&tmp.0.join("plays.db")).unwrap());
+        assert_eq!(stars(&again), [2, 0, 0]);
     }
 
     #[test]

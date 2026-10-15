@@ -1129,6 +1129,23 @@ fn draw_queue(
                     let album = album_year(&track.album, track.year);
                     put(buf, inner, p.x, ry, &fit(&album, p.width), faded(t.dim));
                 }
+                // Stars, clickable; an unrated song shows faint ones only where the highlight is.
+                // Only stars on screen take clicks, so a click on a blank one picks the row.
+                Column::Rating => {
+                    let stars = app.rating(track);
+                    if stars > 0 || selected {
+                        for n in 1..=5u8 {
+                            let x = p.x + n as u16 - 1;
+                            let (star, color) = if n <= stars {
+                                ("★", t.yellow)
+                            } else {
+                                ("☆", t.dim)
+                            };
+                            put(buf, inner, x, ry, star, faded(color));
+                            hit(Rect::new(x, ry, 1, 1), Target::Star(i, n));
+                        }
+                    }
+                }
                 Column::Format => {
                     let color = if hi_res(track) { t.light } else { t.fg };
                     put(
@@ -1204,13 +1221,15 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
             ("d", "remove"),
             ("J/K", "move"),
             ("⇧↑↓", "select"),
+            ("1–5", "rate"),
             ("^Z", "undo"),
             ("s", "save"),
             ("O", "open"),
+            // The rest fall off the end first on a narrow screen, so all keys comes early.
+            ("?", "all keys"),
             ("␣", "pause"),
             ("o", "output"),
             ("m", "minimize"),
-            ("?", "all keys"),
             ("q", "quit"),
         ]
     };
@@ -1467,6 +1486,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
             "⇧↑↓  ^A",
             "Select several; Ctrl+click adds one; Esc lets go",
         ),
+        ("1-5  0", "Rate it (or them), or click a star; 0 unrates"),
         ("^Z  ^Y", "Undo, redo the last change (anywhere)"),
         ("c", "Clear the queue"),
         ("s  S", "Save the playlist; rename it (or click its name)"),
@@ -1941,6 +1961,12 @@ mod tests {
                     .unwrap();
                 keys(&mut app, "b");
                 app.on_key(KeyEvent::from(KeyCode::Esc), &ctx).unwrap();
+                // A few ratings (only on screen; nothing is saved).
+                for (track, stars) in player.queue().iter().zip([5, 0, 3, 4, 0, 1]) {
+                    if stars > 0 {
+                        app.ratings.insert(crate::plays::key(track), stars);
+                    }
+                }
                 if which == "picked" {
                     app.picks = crate::app::Picks {
                         rows: [2, 3, 4].into(),

@@ -11,6 +11,8 @@ In the order they'll be built:
 - [x] **Update in place**: switch to a new version without closing and reopening (0.9.4).
 - [x] **Track plays and scrobbling**: play counts and recently played, sent to Last.fm and
   ListenBrainz (sign-in 0.9.5, plays and scrobbling 0.9.8).
+- [x] **Several queue songs at once**: select them to remove or move together (0.9.10).
+- [x] **Star ratings**: 1 to 5 stars for any song, in the queue and File Info (0.9.11).
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
 - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.

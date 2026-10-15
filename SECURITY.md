@@ -20,7 +20,8 @@ for this repository, rather than in a public issue.
     OMAESTRO.
   - `listenbrainz.json`: your ListenBrainz user token.
 - **Your plays**, in `~/.local/share/omaestro`:
-  - `plays.db`: every play, kept on this computer.
+  - `plays.db`: every play, and your star ratings, kept on this computer. Ratings are never
+    sent anywhere or written into your music files.
   - `scrobbles.json` (readable only by you): plays waiting to go to Last.fm or ListenBrainz.
     What's sent is the song's title, artist, album, length, track number, when you played
     it, and the MusicBrainz id and ISRC if tagged; for Spotify and YouTube Music songs also

@@ -10,17 +10,19 @@ pub enum Column {
     Title,
     Artist,
     Album,
+    Rating,
     Format,
     Time,
 }
 
 impl Column {
-    pub const ALL: [Column; 7] = [
+    pub const ALL: [Column; 8] = [
         Column::Number,
         Column::Source,
         Column::Title,
         Column::Artist,
         Column::Album,
+        Column::Rating,
         Column::Format,
         Column::Time,
     ];
@@ -33,6 +35,7 @@ impl Column {
             Column::Title => "title",
             Column::Artist => "artist",
             Column::Album => "album",
+            Column::Rating => "rating",
             Column::Format => "format",
             Column::Time => "time",
         }
@@ -45,6 +48,7 @@ impl Column {
             Column::Title => "TITLE",
             Column::Artist => "ARTIST",
             Column::Album => "ALBUM",
+            Column::Rating => "RATING",
             Column::Format => "FORMAT",
             Column::Time => "TIME",
         }
@@ -58,6 +62,7 @@ impl Column {
             Column::Title => "Title",
             Column::Artist => "Artist",
             Column::Album => "Album (year)",
+            Column::Rating => "Rating (stars)",
             Column::Format => "Format",
             Column::Time => "Time",
         }
@@ -73,6 +78,7 @@ impl Column {
         match self {
             Column::Number => 4,
             Column::Source => 3,
+            Column::Rating => 8,
             Column::Format => 9,
             Column::Time => 5,
             _ => 0,
@@ -84,7 +90,8 @@ impl Column {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct QueueColumns {
-    /// Columns not shown, by name: "number", "source", "artist", "album", "format", "time".
+    /// Columns not shown, by name: "number", "source", "artist", "album", "rating", "format",
+    /// "time".
     pub hidden: Vec<String>,
     /// Widths of the text columns, in characters. The last one shown takes whatever's left.
     pub title: u16,
@@ -201,6 +208,7 @@ pub fn layout(left: u16, right: u16, cols: &QueueColumns) -> (u16, Vec<Placed>) 
         }
         let (width, gap) = match column {
             Column::Source => (1, 2),
+            Column::Rating => (6, 2),
             Column::Format => (7, 2),
             Column::Time => (5, 0),
             _ => {
@@ -233,12 +241,14 @@ mod tests {
         let time = find(&placed, Column::Time).unwrap();
         assert_eq!(time.x + time.width - 1, 115, "time ends at the right edge");
         let album = find(&placed, Column::Album).unwrap();
-        let format = find(&placed, Column::Format).unwrap();
+        let rating = find(&placed, Column::Rating).unwrap();
         assert_eq!(
             album.x + album.width + 2,
-            format.x,
-            "album grew to meet format"
+            rating.x,
+            "album grew to meet rating"
         );
+        let format = find(&placed, Column::Format).unwrap();
+        assert_eq!(rating.x + 8, format.x);
     }
 
     #[test]

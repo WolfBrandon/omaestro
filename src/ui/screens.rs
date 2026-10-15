@@ -514,6 +514,10 @@ pub(super) fn draw_file_info(
         }
     };
     row(buf, "Played", &played, plain, &mut y);
+    if info.rating > 0 {
+        let stars = crate::app::stars_text(info.rating);
+        row(buf, "Rating", &stars, fg(t.yellow), &mut y);
+    }
     row(buf, "ISRC", &track.isrc, fg(t.dim), &mut y);
     row(buf, "MusicBrainz", &track.mb_track_id, fg(t.dim), &mut y);
     y += 1;

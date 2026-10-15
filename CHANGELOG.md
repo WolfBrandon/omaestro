@@ -3,11 +3,27 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.11 — 2026-10-14
+
+- **Star ratings.**
+  - In the queue, `1` to `5` give the highlighted song that many stars, or all the
+    selected songs at once. `0` takes the rating off.
+  - Or click a star in the new **Rating** column; clicking the rating a song already has
+    takes it off. An unrated song shows faint stars when it's highlighted: click the song,
+    then a star.
+  - A rating belongs to the song, local, Spotify or YouTube Music, so it shows wherever the
+    song is, and in File Info.
+  - Ratings are kept in `plays.db` beside your plays. They're never written into your music
+    files or sent anywhere.
+  - The column can be hidden like the others (`C`).
+- **The hint bar keeps `? all keys` in view:** it now comes before the keys that drop off
+  first on a narrow screen.
+
 ## 0.9.10 — 2026-10-14
 
 - **Select several songs in the queue,** to remove or move them together.
-  - `Shift+↑`/`↓` (or Page Up/Down, Home, End) selects from the highlighted song on;
-    `Ctrl+A` selects the whole queue.
+  - `Shift+↑`/`↓` (or `Shift+Home`/`End`) selects from the highlighted song on; `Ctrl+A`
+    selects the whole queue.
   - With the mouse, `Ctrl+click` adds a song or drops it, and `Alt+click` selects everything
     up to the song clicked. `Shift+click` can't do it: the terminal keeps Shift for
     selecting text.

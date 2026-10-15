@@ -174,11 +174,16 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
 
 **In the queue:**
 - `d` removes, `J`/`K` move, `c` clears; `Ctrl+Z` undoes and `Ctrl+Y` redoes.
-- **Several songs at once:** `Shift+↑`/`↓` selects from the highlight on, `Ctrl+A` selects
-  them all, and `Ctrl+click` adds or drops one (`Alt+click` selects up to the song clicked).
+- **Several songs at once:** `Shift+↑`/`↓` (or `Shift+Home`/`End`) selects from the highlight
+  on, `Ctrl+A` selects them all, and `Ctrl+click` adds or drops one (`Alt+click` selects up to
+  the song clicked).
   `d` removes the selected songs, and `J`/`K` or dragging any of them moves them together.
   `Esc` lets go. (`Shift+click` is kept by the terminal for selecting text, so it doesn't
   reach OMAESTRO.)
+- **Star ratings:** `1` to `5` rate the highlighted song (or all the selected ones), and `0`
+  takes the rating off. Or click a star in the Rating column; clicking the rating a song
+  already has takes it off. A rating belongs to the song, so it shows in every playlist and
+  in File Info. Ratings stay in OMAESTRO; your music files are never changed.
 - `s` saves; `S`, or clicking the playlist's name, renames it right there.
 - `O` opens a playlist: saved ones, or your Spotify and YouTube Music playlists.
 - With the mouse: drag songs to reorder, and drag the `╎` marks in the heading row to resize
@@ -243,8 +248,8 @@ never = []                              # speaker ids never to send anything to
   `lastfm.json`, `listenbrainz.json`: sign-ins, readable only by you. Deleting one signs out.
 - `~/.local/share/omaestro/playlists/*.jspf`: your playlists (JSPF, a standard format).
 - `~/.local/share/omaestro/last-queue.jspf` and `last-queue.json`: the queue as you left it.
-- `~/.local/share/omaestro/plays.db`: every play (when, and the song). Deleting it forgets
-  them.
+- `~/.local/share/omaestro/plays.db`: every play (when, and the song), and your star
+  ratings. Deleting it forgets them.
 - `~/.local/share/omaestro/scrobbles.json`: plays waiting to go to Last.fm or ListenBrainz
   (readable only by you).
 - `~/.local/share/omaestro/soloist/`: Spotify Soloist, once downloaded.

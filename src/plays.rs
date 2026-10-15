@@ -6,11 +6,13 @@
 //!
 //! Plays are kept in `~/.local/share/omaestro/plays.db`, one row per play, away from the
 //! library index (which is a cache, safe to delete). They give "Recently played" and "Most
-//! played", and how often you've played each song.
+//! played", and how often you've played each song. Star ratings live there too, one row per
+//! rated song: never in the music files themselves.
 
 use crate::library::{Db, Source, Track};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// A song's identity across plays: its file, or its Spotify or YouTube id.
@@ -170,7 +172,13 @@ impl Store {
                  track TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS plays_key ON plays(key);
-             CREATE INDEX IF NOT EXISTS plays_at ON plays(at);",
+             CREATE INDEX IF NOT EXISTS plays_at ON plays(at);
+             CREATE TABLE IF NOT EXISTS ratings (
+                 key TEXT PRIMARY KEY,
+                 stars INTEGER NOT NULL,
+                 at INTEGER NOT NULL,
+                 track TEXT NOT NULL
+             );",
         )?;
         Ok(Store { conn })
     }
@@ -186,6 +194,32 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Gives `track` 1 to 5 stars, or takes its rating off (0).
+    pub fn rate(&self, track: &Track, stars: u8, at: u64) -> Result<()> {
+        if stars == 0 {
+            self.conn
+                .execute("DELETE FROM ratings WHERE key = ?1", [key(track)])?;
+        } else {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO ratings (key, stars, at, track) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    key(track),
+                    stars.min(5),
+                    at as i64,
+                    crate::playlist::to_jspf(track).to_string()
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Every rated song's stars, by `key`.
+    pub fn ratings(&self) -> Result<HashMap<String, u8>> {
+        let mut stmt = self.conn.prepare("SELECT key, stars FROM ratings")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u8>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// How many times `track` has been played, and when it was last.
@@ -366,6 +400,26 @@ mod tests {
             other.as_slice(),
             [Happened::Started(..), Happened::Played(..)]
         ));
+    }
+
+    #[test]
+    fn keeps_ratings_until_taken_off() {
+        let tmp = TempDir::new("ratings");
+        let path = tmp.0.join("plays.db");
+        let store = Store::open(&path).unwrap();
+        let (a, b) = (song("a", 200), song("b", 200));
+        assert!(store.ratings().unwrap().is_empty());
+        store.rate(&a, 4, 100).unwrap();
+        store.rate(&b, 2, 100).unwrap();
+        store.rate(&b, 5, 200).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let ratings = store.ratings().unwrap();
+        assert_eq!(ratings.get(&key(&a)), Some(&4));
+        assert_eq!(ratings.get(&key(&b)), Some(&5), "the newest rating wins");
+        store.rate(&a, 0, 300).unwrap();
+        assert_eq!(store.ratings().unwrap().len(), 1, "0 takes it off");
     }
 
     #[test]

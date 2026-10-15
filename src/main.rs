@@ -131,7 +131,9 @@ fn run_player(resume: bool) -> Result<()> {
     let last = session::load(&config::data_dir(), &db);
     let mut app = App::new(db, config, news_tx.clone())?;
     // Plays: remembered here, and sent to Last.fm and ListenBrainz when they're connected.
-    app.plays = plays::Store::open(&config::data_dir().join("plays.db")).ok();
+    if let Ok(store) = plays::Store::open(&config::data_dir().join("plays.db")) {
+        app.open_plays(store);
+    }
     app.scrobbler = Some(scrobble::Scrobbler::start(
         config::data_dir().join("scrobbles.json"),
         scrobble::Endpoints::default(),
