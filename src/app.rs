@@ -70,6 +70,7 @@ pub enum Action {
     /// Move a queue entry up (true) or down.
     Move(usize, bool),
     Undo,
+    Redo,
     Clear,
     /// Save the queue as a playlist with this name.
     SavePlaylist(String),
@@ -1760,8 +1761,9 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => return Ok(Some(Action::Quit)),
-                // Undo works everywhere, even while typing in a search box.
+                // Undo and redo work everywhere, even while typing in a search box.
                 KeyCode::Char('z') => return Ok(Some(Action::Undo)),
+                KeyCode::Char('y') => return Ok(Some(Action::Redo)),
                 _ => {}
             }
         }
@@ -1835,7 +1837,6 @@ impl App {
             KeyCode::Char('d') | KeyCode::Delete => here.map(Action::Remove),
             KeyCode::Char('K') => here.map(|i| Action::Move(i, true)),
             KeyCode::Char('J') => here.map(|i| Action::Move(i, false)),
-            KeyCode::Char('u') => Some(Action::Undo),
             KeyCode::Char('c') => Some(Action::Clear),
             KeyCode::Char('s') => self.save(ctx),
             KeyCode::Char('S') => {
@@ -2541,10 +2542,9 @@ pub mod tests {
             press(&mut app, KeyCode::Char('K'), &ctx),
             Some(Action::Move(1, true))
         );
-        assert_eq!(
-            press(&mut app, KeyCode::Char('u'), &ctx),
-            Some(Action::Undo)
-        );
+        // u isn't undo any more: one Shift away from U (switch to a new version), it took
+        // songs out of the queue by surprise.
+        assert_eq!(press(&mut app, KeyCode::Char('u'), &ctx), None);
         assert_eq!(
             press(&mut app, KeyCode::Char('c'), &ctx),
             Some(Action::Clear)
@@ -2661,6 +2661,8 @@ pub mod tests {
         });
         let ctrl_z = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
         assert_eq!(app.on_key(ctrl_z, &ctx).unwrap(), Some(Action::Undo));
+        let ctrl_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(app.on_key(ctrl_y, &ctx).unwrap(), Some(Action::Redo));
     }
 
     fn path_ref(app: &App, name: &str) -> PathBuf {

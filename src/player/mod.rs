@@ -177,6 +177,8 @@ pub struct Player {
     queue: Vec<Track>,
     current: Option<usize>,
     undo: Vec<Snapshot>,
+    /// What undo took back, for redo; emptied by any new edit.
+    redo: Vec<Snapshot>,
     /// Goes up with every change to the queue, so the screen can tell it was edited after saving.
     pub revision: u64,
     /// The playlist the queue holds, if it was opened or saved as one. Part of the queue's
@@ -216,6 +218,7 @@ impl Player {
             queue: Vec::new(),
             current: None,
             undo: Vec::new(),
+            redo: Vec::new(),
             revision: 0,
             playlist: None,
             upcoming: None,
@@ -256,16 +259,23 @@ impl Player {
     /// Keeps a copy of the queue for undo, with a few words about the change to come; call
     /// before changing it.
     fn remember(&mut self, what: String) {
-        self.undo.push(Snapshot {
+        let snap = self.snapshot(what);
+        self.undo.push(snap);
+        if self.undo.len() > UNDO_STEPS {
+            self.undo.remove(0);
+        }
+        // A new edit starts a new history: what was undone can't be redone any more.
+        self.redo.clear();
+        self.revision += 1;
+    }
+
+    fn snapshot(&self, what: String) -> Snapshot {
+        Snapshot {
             queue: self.queue.clone(),
             current: self.current,
             playlist: self.playlist.clone(),
             what,
-        });
-        if self.undo.len() > UNDO_STEPS {
-            self.undo.remove(0);
         }
-        self.revision += 1;
     }
 
     /// Replaces the queue with `tracks` and plays from `start`. The queue isn't the playlist
@@ -408,6 +418,26 @@ impl Player {
         let Some(snap) = self.undo.pop() else {
             return Ok(None);
         };
+        let what = snap.what.clone();
+        self.redo.push(self.snapshot(what.clone()));
+        self.put_back(snap)?;
+        Ok(Some(what))
+    }
+
+    /// Makes the last undone edit again. Returns what was redone, or None when there's
+    /// nothing to redo.
+    pub fn redo(&mut self) -> Result<Option<String>> {
+        let Some(snap) = self.redo.pop() else {
+            return Ok(None);
+        };
+        let what = snap.what.clone();
+        self.undo.push(self.snapshot(what.clone()));
+        self.put_back(snap)?;
+        Ok(Some(what))
+    }
+
+    /// Puts the queue back as it was in `snap`, keeping the ▶ on the song playing.
+    fn put_back(&mut self, snap: Snapshot) -> Result<()> {
         let playing = self.current().filter(|_| !self.status.idle).cloned();
         self.queue = snap.queue;
         self.playlist = snap.playlist;
@@ -421,8 +451,7 @@ impl Player {
             }
             None => snap.current.filter(|&i| i < self.queue.len()),
         };
-        self.sync_upcoming()?;
-        Ok(Some(snap.what))
+        self.sync_upcoming()
     }
 
     // ---- playing -----------------------------------------------------------------------
@@ -1568,6 +1597,34 @@ mod tests {
 
     fn titles(player: &Player) -> Vec<&str> {
         player.queue().iter().map(|t| t.title.as_str()).collect()
+    }
+
+    /// Undo can be taken back with redo, a step at a time, until the queue is edited again.
+    #[test]
+    fn undo_can_be_redone_until_the_next_edit() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-redo");
+        let (mut player, _rx) = silent(&tmp);
+        for title in ["a", "b", "c"] {
+            player.enqueue(named(&[title])).unwrap();
+        }
+        assert_eq!(player.undo().unwrap().as_deref(), Some("added c"));
+        assert_eq!(player.undo().unwrap().as_deref(), Some("added b"));
+        assert_eq!(titles(&player), ["a"]);
+        assert_eq!(player.redo().unwrap().as_deref(), Some("added b"));
+        assert_eq!(titles(&player), ["a", "b"]);
+        assert_eq!(player.redo().unwrap().as_deref(), Some("added c"));
+        assert_eq!(titles(&player), ["a", "b", "c"]);
+        assert_eq!(player.redo().unwrap(), None, "nothing more to redo");
+
+        // A new edit after undoing ends what can be redone.
+        player.undo().unwrap();
+        player.remove(0).unwrap();
+        assert_eq!(player.redo().unwrap(), None);
+        assert_eq!(titles(&player), ["b"]);
     }
 
     /// Queue edits keep the ▶ on the right song, and undo walks them back. The files don't

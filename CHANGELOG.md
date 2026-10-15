@@ -3,6 +3,14 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.9 — 2026-10-14
+
+- **`u` no longer undoes.** It sat one Shift away from `U` (switch to a new version), so a
+  slip took songs out of the queue, one per press, as each "added" was undone. Undo is
+  `Ctrl+Z` alone now.
+- **Redo:** `Ctrl+Y` puts back what undo took away, a step at a time, until the queue is
+  edited again. After an undo, the status line says so.
+
 ## 0.9.8 — 2026-10-14
 
 - **Plays are counted.**

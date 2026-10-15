@@ -683,8 +683,15 @@ fn apply(
         Action::MoveTo(from, to) => app.queue_sel = player.move_to(from, to)?,
         Action::Undo => {
             app.status = match player.undo()? {
-                Some(what) => format!("Undone: {what}"),
+                Some(what) => format!("Undone: {what} (Ctrl+Y redoes it)"),
                 None => "Nothing to undo".into(),
+            };
+            app.queue_sel = app.queue_sel.min(player.queue().len().saturating_sub(1));
+        }
+        Action::Redo => {
+            app.status = match player.redo()? {
+                Some(what) => format!("Redone: {what}"),
+                None => "Nothing to redo".into(),
             };
             app.queue_sel = app.queue_sel.min(player.queue().len().saturating_sub(1));
         }

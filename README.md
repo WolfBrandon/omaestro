@@ -163,7 +163,7 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
 | `,` / `.` | Back / forward 10 seconds |
 | `-` / `+` | Volume (OMAESTRO's own, not the desktop's; each output keeps its own) |
 | `o` | Where to play: this computer's outputs and the Sonos groups, in one list. `f` stars one, `h` hides one, `H` shows hidden ones |
-| `Ctrl+Z` | Undo the last change to the queue, from anywhere |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo the last change to the queue, from anywhere |
 | `m` | Minimize into the `special:omaestro` scratchpad; the tray icon or a media widget brings it back |
 | `F2` | Settings, one section at a time (`Tab` or click a pill); `/` finds a setting by name |
 | `U` | Switch to a newly installed version now (otherwise it switches at the next pause) |
@@ -172,7 +172,7 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
 | `q` | Quit (the music stops) |
 
 **In the queue:**
-- `d` removes, `J`/`K` move, `u` or `Ctrl+Z` undoes, `c` clears.
+- `d` removes, `J`/`K` move, `c` clears; `Ctrl+Z` undoes and `Ctrl+Y` redoes.
 - `s` saves; `S`, or clicking the playlist's name, renames it right there.
 - `O` opens a playlist: saved ones, or your Spotify and YouTube Music playlists.
 - With the mouse: drag songs to reorder, and drag the `╎` marks in the heading row to resize
