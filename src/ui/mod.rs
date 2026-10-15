@@ -1129,20 +1129,23 @@ fn draw_queue(
                     let album = album_year(&track.album, track.year);
                     put(buf, inner, p.x, ry, &fit(&album, p.width), faded(t.dim));
                 }
-                // Stars, clickable; an unrated song shows faint ones only where the highlight is.
-                // Only stars on screen take clicks, so a click on a blank one picks the row.
+                // Stars a space apart, clickable; an unrated song shows faint ones only where
+                // the highlight is. Only stars on screen take clicks, so a click on a blank one
+                // picks the row. Each star takes the space after it too, as a star can spill
+                // into it.
                 Column::Rating => {
                     let stars = app.rating(track);
                     if stars > 0 || selected {
                         for n in 1..=5u8 {
-                            let x = p.x + n as u16 - 1;
+                            let x = p.x + 2 * (n as u16 - 1);
                             let (star, color) = if n <= stars {
                                 ("★", t.yellow)
                             } else {
                                 ("☆", t.dim)
                             };
                             put(buf, inner, x, ry, star, faded(color));
-                            hit(Rect::new(x, ry, 1, 1), Target::Star(i, n));
+                            let w = if n < 5 { 2 } else { 1 };
+                            hit(Rect::new(x, ry, w, 1), Target::Star(i, n));
                         }
                     }
                 }

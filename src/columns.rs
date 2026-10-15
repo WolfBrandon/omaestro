@@ -78,7 +78,7 @@ impl Column {
         match self {
             Column::Number => 4,
             Column::Source => 3,
-            Column::Rating => 8,
+            Column::Rating => 11,
             Column::Format => 9,
             Column::Time => 5,
             _ => 0,
@@ -208,7 +208,7 @@ pub fn layout(left: u16, right: u16, cols: &QueueColumns) -> (u16, Vec<Placed>) 
         }
         let (width, gap) = match column {
             Column::Source => (1, 2),
-            Column::Rating => (6, 2),
+            Column::Rating => (9, 2),
             Column::Format => (7, 2),
             Column::Time => (5, 0),
             _ => {
@@ -248,7 +248,7 @@ mod tests {
             "album grew to meet rating"
         );
         let format = find(&placed, Column::Format).unwrap();
-        assert_eq!(rating.x + 8, format.x);
+        assert_eq!(rating.x + 11, format.x);
     }
 
     #[test]

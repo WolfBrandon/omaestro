@@ -3,6 +3,12 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.12 — 2026-10-15
+
+- **Stars a space apart.** The Rating column's stars were crowded together; there's now a
+  space between each, and clicking just right of a star still counts as that star. File Info
+  and the status line space them the same way.
+
 ## 0.9.11 — 2026-10-14
 
 - **Star ratings.**

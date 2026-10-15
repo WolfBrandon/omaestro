@@ -397,11 +397,12 @@ pub fn hit_at(hits: &[Hit], x: u16, y: u16) -> Option<Hit> {
         .copied()
 }
 
-/// "★★★☆☆" for 3.
+/// "★ ★ ★ ☆ ☆" for 3: spaced, as in the queue.
 pub fn stars_text(stars: u8) -> String {
     (1..=5)
-        .map(|n| if n <= stars { '★' } else { '☆' })
-        .collect()
+        .map(|n| if n <= stars { "★" } else { "☆" })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// How far along a slider a column is, 0 to 1.
@@ -3660,7 +3661,7 @@ pub mod tests {
 
         press(&mut app, KeyCode::Char('4'), &ctx);
         assert_eq!(stars(&app), [4, 0, 0]);
-        assert_eq!(app.status, "Rated t0 ★★★★☆");
+        assert_eq!(app.status, "Rated t0 ★ ★ ★ ★ ☆");
         app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &ctx)
             .unwrap();
         app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &ctx)
