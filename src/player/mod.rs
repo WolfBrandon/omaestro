@@ -19,6 +19,7 @@ use crate::youtube;
 use anyhow::Result;
 use mpv::{Mpv, MpvEvent, Options};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -398,6 +399,100 @@ impl Player {
         });
         self.sync_upcoming()?;
         Ok(to)
+    }
+
+    /// Takes several songs out of the queue at once (one undo step). Taking out the one
+    /// playing moves on to the next song left after it.
+    pub fn remove_many(&mut self, rows: &[usize]) -> Result<()> {
+        let rows: BTreeSet<usize> = rows
+            .iter()
+            .copied()
+            .filter(|&i| i < self.queue.len())
+            .collect();
+        match rows.len() {
+            0 => return Ok(()),
+            1 => return self.remove(*rows.first().unwrap_or(&0)),
+            n => self.remember(format!("removed {n} songs")),
+        }
+        let was = self.current;
+        let mut kept = Vec::new();
+        let (mut current, mut next) = (None, None);
+        for (i, track) in std::mem::take(&mut self.queue).into_iter().enumerate() {
+            if rows.contains(&i) {
+                continue;
+            }
+            if Some(i) == was {
+                current = Some(kept.len());
+            }
+            if next.is_none() && was.is_some_and(|c| i > c) {
+                next = Some(kept.len());
+            }
+            kept.push(track);
+        }
+        self.queue = kept;
+        if current.is_some() || was.is_none() {
+            self.current = current;
+            return self.sync_upcoming();
+        }
+        let playing = !self.status.idle;
+        match next {
+            Some(n) if playing => self.jump(n),
+            Some(n) => {
+                self.current = Some(n);
+                self.sync_upcoming()
+            }
+            None => {
+                self.current = self.queue.len().checked_sub(1);
+                if playing {
+                    self.stop()
+                } else {
+                    self.sync_upcoming()
+                }
+            }
+        }
+    }
+
+    /// Moves several songs one place up (`up`) or down together. Returns where they are now.
+    pub fn nudge_many(&mut self, rows: &[usize], up: bool) -> Result<Vec<usize>> {
+        let rows = self.valid(rows);
+        let order = nudged(self.queue.len(), &rows, up);
+        self.reorder(order, &rows)
+    }
+
+    /// Moves several songs together to where they were dragged: just after row `over` when
+    /// dragged down, just before it when dragged up. Returns where they are now.
+    pub fn drop_many(&mut self, rows: &[usize], over: usize, down: bool) -> Result<Vec<usize>> {
+        let rows = self.valid(rows);
+        let order = regrouped(self.queue.len(), &rows, over, down);
+        self.reorder(order, &rows)
+    }
+
+    fn valid(&self, rows: &[usize]) -> BTreeSet<usize> {
+        rows.iter()
+            .copied()
+            .filter(|&i| i < self.queue.len())
+            .collect()
+    }
+
+    /// Puts the queue in a new `order` (old positions, in their new places). Returns where
+    /// `rows` are now.
+    fn reorder(&mut self, order: Vec<usize>, rows: &BTreeSet<usize>) -> Result<Vec<usize>> {
+        let now = |order: &[usize]| -> Vec<usize> {
+            (0..order.len())
+                .filter(|&n| rows.contains(&order[n]))
+                .collect()
+        };
+        if order.iter().enumerate().all(|(n, &i)| n == i) {
+            return Ok(now(&order));
+        }
+        self.remember(format!("moved {} songs", rows.len()));
+        let old = std::mem::take(&mut self.queue);
+        self.queue = order.iter().map(|&i| old[i].clone()).collect();
+        self.current = self
+            .current
+            .and_then(|c| order.iter().position(|&i| i == c));
+        self.sync_upcoming()?;
+        Ok(now(&order))
     }
 
     /// Empties the queue and stops.
@@ -1298,6 +1393,38 @@ fn pipewire_devices(list: &Value) -> Vec<AudioDevice> {
         .collect()
 }
 
+/// The queue's order (old positions) after moving `rows` one place up or down together:
+/// each steps over the song beside the group. Rows already at the top (or bottom) stay.
+fn nudged(len: usize, rows: &BTreeSet<usize>, up: bool) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len).collect();
+    if up {
+        for n in 1..len {
+            if rows.contains(&order[n]) && !rows.contains(&order[n - 1]) {
+                order.swap(n, n - 1);
+            }
+        }
+    } else {
+        for n in (0..len.saturating_sub(1)).rev() {
+            if rows.contains(&order[n]) && !rows.contains(&order[n + 1]) {
+                order.swap(n, n + 1);
+            }
+        }
+    }
+    order
+}
+
+/// The queue's order (old positions) after dragging `rows` onto row `over`: together, in
+/// their order, just after `over` when dragged down and just before it when dragged up.
+fn regrouped(len: usize, rows: &BTreeSet<usize>, over: usize, down: bool) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len).filter(|i| !rows.contains(i)).collect();
+    let at = order
+        .iter()
+        .filter(|&&i| if down { i <= over } else { i < over })
+        .count();
+    order.splice(at..at, rows.iter().copied());
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1597,6 +1724,83 @@ mod tests {
 
     fn titles(player: &Player) -> Vec<&str> {
         player.queue().iter().map(|t| t.title.as_str()).collect()
+    }
+
+    fn set(rows: &[usize]) -> BTreeSet<usize> {
+        rows.iter().copied().collect()
+    }
+
+    /// Picked songs step over their neighbour together; at the top or bottom they stay.
+    #[test]
+    fn picked_songs_move_one_place_together() {
+        assert_eq!(nudged(5, &set(&[2, 3]), true), [0, 2, 3, 1, 4]);
+        assert_eq!(nudged(5, &set(&[2, 3]), false), [0, 1, 4, 2, 3]);
+        assert_eq!(
+            nudged(4, &set(&[0, 2]), true),
+            [0, 2, 1, 3],
+            "the top one stays"
+        );
+        assert_eq!(
+            nudged(4, &set(&[1, 3]), false),
+            [0, 2, 1, 3],
+            "the last one stays"
+        );
+        assert_eq!(nudged(3, &set(&[0, 1, 2]), true), [0, 1, 2]);
+    }
+
+    /// Dragged together, picked songs land side by side after the row they're dropped on
+    /// (dragging down) or before it (dragging up); one song moves as a single drag does.
+    #[test]
+    fn picked_songs_drop_together() {
+        assert_eq!(regrouped(6, &set(&[0, 2]), 4, true), [1, 3, 4, 0, 2, 5]);
+        assert_eq!(regrouped(6, &set(&[3, 5]), 1, false), [0, 3, 5, 1, 2, 4]);
+        assert_eq!(regrouped(4, &set(&[1]), 3, true), [0, 2, 3, 1]);
+        assert_eq!(regrouped(4, &set(&[3]), 0, false), [3, 0, 1, 2]);
+        assert_eq!(regrouped(4, &set(&[0, 3]), 3, true), [1, 2, 0, 3]);
+    }
+
+    /// Removing or moving several songs is one undo step, and the ▶ stays on its song or
+    /// moves to the next one left.
+    #[test]
+    fn several_songs_are_removed_or_moved_at_once() {
+        if !have("mpv") {
+            eprintln!("skipping: needs mpv");
+            return;
+        }
+        let tmp = TempDir::new("player-many");
+        let (mut player, _rx) = silent(&tmp);
+        player
+            .load(named(&["a", "b", "c", "d", "e", "f"]), None)
+            .unwrap();
+        player.current = Some(3);
+
+        assert_eq!(player.nudge_many(&[1, 3], true).unwrap(), [0, 2]);
+        assert_eq!(titles(&player), ["b", "a", "d", "c", "e", "f"]);
+        assert_eq!(player.current().unwrap().title, "d");
+        assert_eq!(player.drop_many(&[0, 2], 5, true).unwrap(), [4, 5]);
+        assert_eq!(titles(&player), ["a", "c", "e", "f", "b", "d"]);
+        assert_eq!(player.current().unwrap().title, "d");
+
+        player.remove_many(&[0, 5, 2]).unwrap();
+        assert_eq!(titles(&player), ["c", "f", "b"]);
+        assert_eq!(
+            player.current().unwrap().title,
+            "b",
+            "d went, and it was last: the ▶ goes to the last song"
+        );
+        player.current = Some(0);
+        player.remove_many(&[0, 1]).unwrap();
+        assert_eq!(titles(&player), ["b"]);
+        assert_eq!(
+            player.current().unwrap().title,
+            "b",
+            "c went: on to the next left"
+        );
+
+        assert_eq!(player.undo().unwrap().as_deref(), Some("removed 2 songs"));
+        assert_eq!(player.undo().unwrap().as_deref(), Some("removed 3 songs"));
+        assert_eq!(player.undo().unwrap().as_deref(), Some("moved 2 songs"));
+        assert_eq!(titles(&player), ["b", "a", "d", "c", "e", "f"]);
     }
 
     /// Undo can be taken back with redo, a step at a time, until the queue is edited again.

@@ -548,6 +548,7 @@ fn event_loop(
                 devices: &player.status.devices,
                 output: &player.output,
                 playlist: player.playlist.as_ref(),
+                revision: player.revision,
             };
             let action = match event {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key, &ctx)?,
@@ -680,6 +681,24 @@ fn apply(
             app.queue_sel = index.min(player.queue().len().saturating_sub(1));
         }
         Action::Move(index, up) => app.queue_sel = player.move_track(index, up)?,
+        Action::RemoveMany(rows) => {
+            player.remove_many(&rows)?;
+            app.picks.rows.clear();
+            let first = rows.iter().min().copied().unwrap_or(0);
+            app.queue_sel = first.min(player.queue().len().saturating_sub(1));
+            app.status = format!(
+                "Removed {} (Ctrl+Z puts them back)",
+                plural(rows.len(), "song")
+            );
+        }
+        Action::NudgeMany(rows, up) => {
+            let now = player.nudge_many(&rows, up)?;
+            app.picks_moved(&rows, &now, app.queue_sel, player.revision);
+        }
+        Action::DropMany { rows, from, over } => {
+            let now = player.drop_many(&rows, over, over > from)?;
+            app.picks_moved(&rows, &now, from, player.revision);
+        }
         Action::MoveTo(from, to) => app.queue_sel = player.move_to(from, to)?,
         Action::Undo => {
             app.status = match player.undo()? {

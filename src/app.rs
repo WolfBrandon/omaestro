@@ -22,6 +22,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -69,6 +70,16 @@ pub enum Action {
     MoveTo(usize, usize),
     /// Move a queue entry up (true) or down.
     Move(usize, bool),
+    /// Take these queue entries out.
+    RemoveMany(Vec<usize>),
+    /// Move these queue entries one place up (true) or down together.
+    NudgeMany(Vec<usize>, bool),
+    /// Move these queue entries together, dragged by `from` onto row `over`.
+    DropMany {
+        rows: Vec<usize>,
+        from: usize,
+        over: usize,
+    },
     Undo,
     Redo,
     Clear,
@@ -148,6 +159,8 @@ pub struct Ctx<'a> {
     pub output: &'a Output,
     /// The saved playlist the queue holds, if any.
     pub playlist: Option<&'a Named>,
+    /// Goes up with every change to the queue.
+    pub revision: u64,
 }
 
 /// A place music can play, as the output picker lists it: an mpv device name on this
@@ -397,6 +410,16 @@ pub struct FileInfo {
     pub back: Option<Box<Overlay>>,
 }
 
+/// Songs picked in the queue (Shift+↑↓, Ctrl+click) to remove or move together.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Picks {
+    pub rows: BTreeSet<usize>,
+    /// Where a Shift range starts.
+    pub anchor: usize,
+    /// The queue's revision when they were picked: any other change to the queue drops them.
+    pub revision: u64,
+}
+
 /// Something being dragged with the mouse.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Drag {
@@ -431,6 +454,8 @@ pub struct App {
     pub queue_sel: usize,
     /// First queue row on screen; kept by the screen code as the selection moves.
     pub queue_top: Cell<usize>,
+    /// Songs picked to remove or move together.
+    pub picks: Picks,
     /// What the mouse is dragging: a queue row, or a column's edge.
     pub drag: Option<Drag>,
     /// Where the list icon was drawn, so its menu can hang from it.
@@ -495,6 +520,8 @@ pub struct App {
     pub youtube_account: Option<youtube::Account>,
     /// The button or row the mouse went down on, and when the last click landed.
     pressed: Option<Target>,
+    /// The keys held as the mouse went down (Ctrl+click picks a song).
+    pressed_with: KeyModifiers,
     last_click: Option<(Target, Instant)>,
     ignore_clicks_until: Option<Instant>,
 }
@@ -513,6 +540,7 @@ impl App {
             latest_search: Arc::new(AtomicU64::new(0)),
             queue_sel: 0,
             queue_top: Cell::new(0),
+            picks: Picks::default(),
             drag: None,
             columns_anchor: Cell::new(None),
             overlay: None,
@@ -550,6 +578,7 @@ impl App {
             youtube: Arc::new(Mutex::new(None)),
             youtube_account: youtube::account(),
             pressed: None,
+            pressed_with: KeyModifiers::NONE,
             last_click: None,
             ignore_clicks_until: None,
         };
@@ -1820,12 +1849,53 @@ impl App {
     }
 
     fn queue_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Option<Action> {
+        // Shift+↑↓ (and Page Up/Down, Home, End) selects songs from the highlight on.
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let arrows = matches!(
+            key.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+        );
         if let Some(delta) = movement(key.code) {
-            self.queue_sel = step(self.queue_sel, ctx.queue.len(), delta);
+            let to = step(self.queue_sel, ctx.queue.len(), delta);
+            if shift && arrows {
+                self.pick_range(to, ctx);
+            } else {
+                self.picks.rows.clear();
+                self.queue_sel = to;
+            }
             return None;
         }
         let here = (self.queue_sel < ctx.queue.len()).then_some(self.queue_sel);
+        // d, J and K act on the selected songs, if there are any.
+        let picked = self.picked(ctx.revision, ctx.queue.len());
+        let many = (!picked.is_empty()).then_some(picked);
         match key.code {
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !ctx.queue.is_empty() {
+                    self.picks = Picks {
+                        rows: (0..ctx.queue.len()).collect(),
+                        anchor: 0,
+                        revision: ctx.revision,
+                    };
+                    self.say_picked();
+                }
+                None
+            }
+            KeyCode::Esc => {
+                if many.is_some() {
+                    self.picks.rows.clear();
+                    self.status.clear();
+                }
+                None
+            }
+            KeyCode::Char('d') | KeyCode::Delete if many.is_some() => many.map(Action::RemoveMany),
+            KeyCode::Char('K') if many.is_some() => many.map(|rows| Action::NudgeMany(rows, true)),
+            KeyCode::Char('J') if many.is_some() => many.map(|rows| Action::NudgeMany(rows, false)),
             KeyCode::Enter => here.map(Action::Jump),
             KeyCode::Char('U') => Some(Action::Update),
             KeyCode::Char('i') => {
@@ -1853,6 +1923,91 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// The songs selected in the queue, if they still belong to it.
+    pub fn picked(&self, revision: u64, len: usize) -> Vec<usize> {
+        if self.picks.revision != revision {
+            return Vec::new();
+        }
+        self.picks
+            .rows
+            .iter()
+            .copied()
+            .filter(|&i| i < len)
+            .collect()
+    }
+
+    /// Selects every song from where the selection started to `to` (Shift+↑↓, Shift+click).
+    fn pick_range(&mut self, to: usize, ctx: &Ctx) {
+        if ctx.queue.is_empty() {
+            return;
+        }
+        let anchor = if self.picked(ctx.revision, ctx.queue.len()).is_empty() {
+            self.queue_sel.min(ctx.queue.len() - 1)
+        } else {
+            self.picks.anchor
+        };
+        self.picks = Picks {
+            rows: (anchor.min(to)..=anchor.max(to)).collect(),
+            anchor,
+            revision: ctx.revision,
+        };
+        self.queue_sel = to;
+        self.say_picked();
+    }
+
+    /// Selects a song, or unselects it (Ctrl+click). The first one also selects the song
+    /// that was highlighted.
+    fn pick_toggle(&mut self, i: usize, ctx: &Ctx) {
+        let mut rows: BTreeSet<usize> = self
+            .picked(ctx.revision, ctx.queue.len())
+            .into_iter()
+            .collect();
+        if rows.is_empty() && self.queue_sel < ctx.queue.len() && self.queue_sel != i {
+            rows.insert(self.queue_sel);
+        }
+        if !rows.remove(&i) {
+            rows.insert(i);
+        }
+        self.picks = Picks {
+            rows,
+            anchor: i,
+            revision: ctx.revision,
+        };
+        self.queue_sel = i;
+        self.say_picked();
+    }
+
+    fn say_picked(&mut self) {
+        let n = self.picks.rows.len();
+        if n > 1 {
+            self.status = format!(
+                "{n} songs selected: d removes them, J/K or a drag moves them, Esc lets go"
+            );
+        }
+    }
+
+    /// After selected songs moved together: they stay selected where they are now, and the
+    /// highlight goes with `follow` if it was one of them.
+    pub fn picks_moved(&mut self, rows: &[usize], now: &[usize], follow: usize, revision: u64) {
+        let mut rows = rows.to_vec();
+        rows.sort_unstable();
+        rows.dedup();
+        let new = |old: usize| {
+            rows.iter()
+                .position(|&r| r == old)
+                .and_then(|k| now.get(k).copied())
+        };
+        self.queue_sel = new(follow)
+            .or(now.first().copied())
+            .unwrap_or(self.queue_sel);
+        let anchor = new(self.picks.anchor).unwrap_or(self.queue_sel);
+        self.picks = Picks {
+            rows: now.iter().copied().collect(),
+            anchor,
+            revision,
+        };
     }
 
     fn overlay_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Result<Option<Action>> {
@@ -2029,6 +2184,7 @@ impl App {
                     }
                 }
                 self.pressed = target;
+                self.pressed_with = m.modifiers;
                 // The volume follows the mouse from the first click.
                 if let Some(Hit {
                     area,
@@ -2066,6 +2222,11 @@ impl App {
                 match self.drag.take() {
                     Some(Drag::Row { from, over }) if from != over => {
                         self.pressed = None;
+                        // Dragging a selected song takes all the selected ones with it.
+                        let rows = self.picked(ctx.revision, ctx.queue.len());
+                        if rows.contains(&from) {
+                            return Ok(Some(Action::DropMany { rows, from, over }));
+                        }
                         return Ok(Some(Action::MoveTo(from, over)));
                     }
                     Some(Drag::Column { .. }) => {
@@ -2165,7 +2326,22 @@ impl App {
                 Some(Action::Settings { rescan: false })
             }
             Target::ColumnEdge(..) => None,
+            // Ctrl+click selects or unselects a song; Shift+click (where the terminal passes it
+            // on) or Alt+click selects up to it.
+            Target::Queue(i) if self.pressed_with.contains(KeyModifiers::CONTROL) => {
+                self.pick_toggle(i, ctx);
+                None
+            }
+            Target::Queue(i)
+                if self
+                    .pressed_with
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+            {
+                self.pick_range(i, ctx);
+                None
+            }
             Target::Queue(i) => {
+                self.picks.rows.clear();
                 self.queue_sel = i;
                 double.then_some(Action::Jump(i))
             }
@@ -2446,13 +2622,34 @@ pub mod tests {
         hits: &[Hit],
         ctx: &Ctx,
     ) -> Option<Action> {
+        mouse_with(app, kind, KeyModifiers::NONE, (x, y), hits, ctx)
+    }
+
+    fn mouse_with(
+        app: &mut App,
+        kind: MouseEventKind,
+        modifiers: KeyModifiers,
+        (x, y): (u16, u16),
+        hits: &[Hit],
+        ctx: &Ctx,
+    ) -> Option<Action> {
         let m = MouseEvent {
             kind,
             column: x,
             row: y,
-            modifiers: KeyModifiers::NONE,
+            modifiers,
         };
         app.on_mouse(m, hits, ctx).unwrap()
+    }
+
+    /// A click with keys held (Ctrl+click, Alt+click).
+    fn click_with(app: &mut App, modifiers: KeyModifiers, y: u16, hits: &[Hit], ctx: &Ctx) {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            mouse_with(app, kind, modifiers, (5, y), hits, ctx);
+        }
     }
 
     fn click(app: &mut App, x: u16, y: u16, hits: &[Hit], ctx: &Ctx) -> Option<Action> {
@@ -2472,6 +2669,7 @@ pub mod tests {
         devices: &[],
         output: &crate::player::Output::Here(String::new()),
         playlist: None,
+        revision: 0,
     };
 
     #[test]
@@ -2530,6 +2728,7 @@ pub mod tests {
             devices: &devices,
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
 
         press(&mut app, KeyCode::Char('j'), &ctx);
@@ -2591,6 +2790,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         assert_eq!(press(&mut app, KeyCode::Char('s'), &ctx), None);
         assert!(matches!(
@@ -2746,6 +2946,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         let hits = [
             Hit {
@@ -2839,6 +3040,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         let row = |i: u16| Hit {
             area: Rect::new(0, 10 + i, 80, 1),
@@ -2966,6 +3168,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         press(&mut app, KeyCode::Char('/'), &ctx);
         assert!(matches!(app.overlay, Some(Overlay::Search)));
@@ -2992,6 +3195,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         app.overlay = Some(Overlay::Settings(Settings::new(&settings::rows(
             &app.config,
@@ -3023,6 +3227,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         let shows = |app: &App| match &app.overlay {
             Some(Overlay::FileInfo(info)) => Some(info.track.title.clone()),
@@ -3137,6 +3342,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         // Settings → Integrations → Connect (Last.fm is the first row there).
         app.overlay = Some(Overlay::Settings(Settings::new(&settings::rows(
@@ -3222,6 +3428,7 @@ pub mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         let hits = [Hit {
             area: Rect::new(110, 59, 8, 1),
@@ -3233,6 +3440,117 @@ pub mod tests {
             Some(Overlay::Settings(s)) => assert_eq!(s.section(&rows), settings::ABOUT),
             _ => panic!("Settings should be open"),
         }
+    }
+
+    /// Shift+↓ selects songs from the highlight on; d and J/K act on all of them; Esc or a
+    /// plain move lets go, and any other change to the queue drops them.
+    #[test]
+    fn several_queue_songs_can_be_selected_with_keys() {
+        let tmp = TempDir::new("app-picks");
+        let mut app = app(&tmp);
+        let queue: Vec<Track> = (0..5)
+            .map(|i| Track {
+                title: format!("t{i}"),
+                ..Track::default()
+            })
+            .collect();
+        let ctx = Ctx {
+            queue: &queue,
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+            revision: 7,
+        };
+        let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+
+        press(&mut app, KeyCode::Char('j'), &ctx);
+        app.on_key(shift(KeyCode::Down), &ctx).unwrap();
+        app.on_key(shift(KeyCode::Down), &ctx).unwrap();
+        assert_eq!(app.picked(7, 5), [1, 2, 3]);
+        assert_eq!(app.queue_sel, 3);
+        assert_eq!(
+            press(&mut app, KeyCode::Char('d'), &ctx),
+            Some(Action::RemoveMany(vec![1, 2, 3]))
+        );
+        assert_eq!(
+            app.on_key(shift(KeyCode::Char('K')), &ctx).unwrap(),
+            Some(Action::NudgeMany(vec![1, 2, 3], true))
+        );
+        // Shift+↑ comes back towards where it started.
+        app.on_key(shift(KeyCode::Up), &ctx).unwrap();
+        assert_eq!(app.picked(7, 5), [1, 2]);
+        assert!(app.picked(8, 5).is_empty(), "the queue changed: dropped");
+
+        press(&mut app, KeyCode::Esc, &ctx);
+        assert!(app.picked(7, 5).is_empty());
+        assert_eq!(
+            press(&mut app, KeyCode::Char('d'), &ctx),
+            Some(Action::Remove(2)),
+            "one song again"
+        );
+
+        let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        app.on_key(ctrl_a, &ctx).unwrap();
+        assert_eq!(app.picked(7, 5), [0, 1, 2, 3, 4]);
+        press(&mut app, KeyCode::Char('j'), &ctx);
+        assert!(app.picked(7, 5).is_empty(), "a plain move lets go");
+    }
+
+    /// Ctrl+click picks songs one by one (with the highlighted one), Alt+click picks a run,
+    /// a plain click lets go, and dragging a selected song takes the others along.
+    #[test]
+    fn several_queue_songs_can_be_selected_with_the_mouse() {
+        let tmp = TempDir::new("app-pick-mouse");
+        let mut app = app(&tmp);
+        let queue: Vec<Track> = (0..6).map(|_| Track::default()).collect();
+        let ctx = Ctx {
+            queue: &queue,
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+            revision: 3,
+        };
+        let hits: Vec<Hit> = (0..6)
+            .map(|i| Hit {
+                area: Rect::new(0, 10 + i, 80, 1),
+                target: Target::Queue(i as usize),
+            })
+            .collect();
+        let ctrl = KeyModifiers::CONTROL;
+
+        click(&mut app, 5, 11, &hits, &ctx);
+        click_with(&mut app, ctrl, 13, &hits, &ctx);
+        assert_eq!(app.picked(3, 6), [1, 3]);
+        click_with(&mut app, ctrl, 14, &hits, &ctx);
+        click_with(&mut app, ctrl, 11, &hits, &ctx);
+        assert_eq!(app.picked(3, 6), [3, 4], "Ctrl+click again unselects");
+
+        // Dragging a selected song moves them all.
+        let down = MouseEventKind::Down(MouseButton::Left);
+        let drag = MouseEventKind::Drag(MouseButton::Left);
+        let up = MouseEventKind::Up(MouseButton::Left);
+        mouse(&mut app, down, 5, 13, &hits, &ctx);
+        mouse(&mut app, drag, 5, 10, &hits, &ctx);
+        assert_eq!(
+            mouse(&mut app, up, 5, 10, &hits, &ctx),
+            Some(Action::DropMany {
+                rows: vec![3, 4],
+                from: 3,
+                over: 0
+            })
+        );
+        // Dragging one that isn't selected moves just that one.
+        mouse(&mut app, down, 5, 15, &hits, &ctx);
+        mouse(&mut app, drag, 5, 10, &hits, &ctx);
+        assert_eq!(
+            mouse(&mut app, up, 5, 10, &hits, &ctx),
+            Some(Action::MoveTo(5, 0))
+        );
+
+        click(&mut app, 5, 10, &hits, &ctx);
+        assert!(app.picked(3, 6).is_empty(), "a plain click lets go");
+        click_with(&mut app, KeyModifiers::ALT, 12, &hits, &ctx);
+        assert_eq!(app.picked(3, 6), [0, 1, 2]);
     }
 
     #[test]

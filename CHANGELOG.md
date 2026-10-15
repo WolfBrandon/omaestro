@@ -3,6 +3,19 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.10 — 2026-10-14
+
+- **Select several songs in the queue,** to remove or move them together.
+  - `Shift+↑`/`↓` (or Page Up/Down, Home, End) selects from the highlighted song on;
+    `Ctrl+A` selects the whole queue.
+  - With the mouse, `Ctrl+click` adds a song or drops it, and `Alt+click` selects everything
+    up to the song clicked. `Shift+click` can't do it: the terminal keeps Shift for
+    selecting text.
+  - `d` removes the selected songs, and `J`/`K` move them up or down together. Dragging
+    any of them moves them all, and they land side by side.
+  - Each is one step for `Ctrl+Z`. `Esc`, a plain click or arrow, or any other change to the
+    queue lets go of the selection. The queue's heading says how many are selected.
+
 ## 0.9.9 — 2026-10-14
 
 - **`u` no longer undoes.** It sat one Shift away from `U` (switch to a new version), so a

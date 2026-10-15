@@ -914,6 +914,10 @@ fn draw_queue(
     let queue = player.queue();
     let current = player.current_index();
     let focused = !app.browse_open && app.overlay.is_none();
+    let picked: std::collections::BTreeSet<usize> = app
+        .picked(player.revision, queue.len())
+        .into_iter()
+        .collect();
     let (cx, cr) = (inner.x + 1, inner.right().saturating_sub(2));
     let full = inner.height >= 6;
     let mut y = inner.y;
@@ -970,11 +974,15 @@ fn draw_queue(
         } else {
             let total: i64 = queue.iter().map(|t| t.duration_ms).sum();
             let tracks = if queue.len() == 1 { "track" } else { "tracks" };
-            format!(
+            let all = format!(
                 "{} {tracks} · {}",
                 queue.len(),
                 clock(total as f64 / 1000.0)
-            )
+            );
+            match picked.len() {
+                0 => all,
+                n => format!("{n} selected · {all}"),
+            }
         };
         let room = cr.saturating_sub(width(&summary) + 2);
         for (icon, target) in [
@@ -1061,11 +1069,20 @@ fn draw_queue(
         let playing = Some(i) == current;
         let played = current.is_some_and(|c| i < c);
         let selected = focused && i == app.queue_sel;
-        if selected {
+        // With songs selected, they're the ones lit up; otherwise the highlight is.
+        let lit = if picked.is_empty() {
+            selected
+        } else {
+            picked.contains(&i)
+        };
+        if lit {
             fill(buf, row, Style::new().bg(t.selection));
         }
+        // A dragged song fades where it was; so do the others selected with it.
+        let moving = dragging
+            .is_some_and(|(from, _)| from == i || (picked.contains(&from) && picked.contains(&i)));
         let faded = |color: Color| {
-            if played || dragging.is_some_and(|(from, _)| from == i) {
+            if played || moving {
                 fg(t.dim).add_modifier(Modifier::DIM)
             } else {
                 fg(color)
@@ -1137,7 +1154,11 @@ fn draw_queue(
             for x in inner.x..inner.right() {
                 put(buf, inner, x, ry, mark, fg(t.accent));
             }
-            let title = fit(&queue[from].title, inner.width.saturating_sub(8));
+            let title = if picked.contains(&from) && picked.len() > 1 {
+                format!("{} songs", picked.len())
+            } else {
+                fit(&queue[from].title, inner.width.saturating_sub(8))
+            };
             put(
                 buf,
                 inner,
@@ -1182,6 +1203,7 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
             ("/", "search"),
             ("d", "remove"),
             ("J/K", "move"),
+            ("⇧↑↓", "select"),
             ("^Z", "undo"),
             ("s", "save"),
             ("O", "open"),
@@ -1275,6 +1297,7 @@ fn draw_picker(
         devices: &player.status.devices,
         output: &player.output,
         playlist: player.playlist.as_ref(),
+        revision: player.revision,
     };
     let rows = app.picker_rows(&ctx, all);
     let hidden = app.picker_rows(&ctx, true).len() - rows.len();
@@ -1438,8 +1461,12 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("", ""),
         ("In the queue", ""),
         ("↑↓  j k", "Move the highlight; ⏎ plays it"),
-        ("d", "Remove it from the queue"),
-        ("J  K", "Move it down or up"),
+        ("d", "Remove it (or all the selected songs)"),
+        ("J  K", "Move it (or them) down or up"),
+        (
+            "⇧↑↓  ^A",
+            "Select several; Ctrl+click adds one; Esc lets go",
+        ),
         ("^Z  ^Y", "Undo, redo the last change (anywhere)"),
         ("c", "Clear the queue"),
         ("s  S", "Save the playlist; rename it (or click its name)"),
@@ -1564,6 +1591,7 @@ mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         let key = |app: &mut App, code| {
             app.on_key(KeyEvent::from(code), &ctx).unwrap();
@@ -1835,6 +1863,7 @@ mod tests {
             devices: &[],
             output: &crate::player::Output::Here(String::new()),
             playlist: None,
+            revision: 0,
         };
         let keys = |app: &mut App, text: &str| {
             for c in text.chars() {
@@ -1903,7 +1932,8 @@ mod tests {
                 ))
             }
             "open" => keys(&mut app, "O"),
-            "queue" => {
+            // The queue; "picked" with three songs selected.
+            "queue" | "picked" => {
                 keys(&mut app, "bblack keys");
                 app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();
                 player
@@ -1911,7 +1941,15 @@ mod tests {
                     .unwrap();
                 keys(&mut app, "b");
                 app.on_key(KeyEvent::from(KeyCode::Esc), &ctx).unwrap();
+                if which == "picked" {
+                    app.picks = crate::app::Picks {
+                        rows: [2, 3, 4].into(),
+                        anchor: 2,
+                        revision: player.revision,
+                    };
+                }
             }
+            "help" => app.overlay = Some(Overlay::Help),
             _ => {
                 keys(&mut app, "bblack keys");
                 app.on_key(KeyEvent::from(KeyCode::Tab), &ctx).unwrap();

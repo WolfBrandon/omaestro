@@ -13,8 +13,9 @@ were designed in [OTIS](https://github.com/WolfBrandon/otis).
 - **Local library**: a fast index of your music folders (a NAS is fine), a slide-up browser
   (`b`) and search.
 - **One queue for everything**: local files, Spotify and YouTube Music songs side by side.
-  Remove, drag to reorder, undo (`Ctrl+Z`), save as playlists (JSPF), reopen them. The queue
-  comes back when you reopen OMAESTRO, at the song and place you left.
+  Remove and drag to reorder, several songs at once if you like; undo (`Ctrl+Z`) and redo
+  (`Ctrl+Y`); save as playlists (JSPF) and reopen them. The queue comes back when you reopen
+  OMAESTRO, at the song and place you left.
 - **Spotify**: sign in with your own Spotify app; search, your playlists and Liked Songs. Plays
   on this computer through [Spotify Soloist](https://github.com/spotify/soloist), or on Sonos.
 - **YouTube Music**: uses your browser's login; search, your playlists and Liked Music. Plays
@@ -173,6 +174,11 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
 
 **In the queue:**
 - `d` removes, `J`/`K` move, `c` clears; `Ctrl+Z` undoes and `Ctrl+Y` redoes.
+- **Several songs at once:** `Shift+↑`/`↓` selects from the highlight on, `Ctrl+A` selects
+  them all, and `Ctrl+click` adds or drops one (`Alt+click` selects up to the song clicked).
+  `d` removes the selected songs, and `J`/`K` or dragging any of them moves them together.
+  `Esc` lets go. (`Shift+click` is kept by the terminal for selecting text, so it doesn't
+  reach OMAESTRO.)
 - `s` saves; `S`, or clicking the playlist's name, renames it right there.
 - `O` opens a playlist: saved ones, or your Spotify and YouTube Music playlists.
 - With the mouse: drag songs to reorder, and drag the `╎` marks in the heading row to resize
