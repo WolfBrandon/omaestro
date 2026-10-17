@@ -17,6 +17,7 @@ In the order they'll be built:
 - [x] **New playlist**: a New button and Ctrl+N; saves a named playlist first (0.9.13).
 - [x] **Several at once in the browser and Search**: select, then add them together (0.9.14).
 - [x] **YouTube videos in Search**: covers and uploads that are only videos (0.9.15).
+- [x] **Source column**: Local, Spotify or YouTube Music, in words (0.9.16).
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
 - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.

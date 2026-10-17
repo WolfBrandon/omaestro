@@ -10,18 +10,21 @@ pub enum Column {
     Title,
     Artist,
     Album,
+    /// Where the song comes from, in words: Local, Spotify or YouTube Music.
+    SourceName,
     Rating,
     Format,
     Time,
 }
 
 impl Column {
-    pub const ALL: [Column; 8] = [
+    pub const ALL: [Column; 9] = [
         Column::Number,
         Column::Source,
         Column::Title,
         Column::Artist,
         Column::Album,
+        Column::SourceName,
         Column::Rating,
         Column::Format,
         Column::Time,
@@ -35,6 +38,7 @@ impl Column {
             Column::Title => "title",
             Column::Artist => "artist",
             Column::Album => "album",
+            Column::SourceName => "source-name",
             Column::Rating => "rating",
             Column::Format => "format",
             Column::Time => "time",
@@ -48,6 +52,7 @@ impl Column {
             Column::Title => "TITLE",
             Column::Artist => "ARTIST",
             Column::Album => "ALBUM",
+            Column::SourceName => "SOURCE",
             Column::Rating => "RATING",
             Column::Format => "FORMAT",
             Column::Time => "TIME",
@@ -62,6 +67,7 @@ impl Column {
             Column::Title => "Title",
             Column::Artist => "Artist",
             Column::Album => "Album (year)",
+            Column::SourceName => "Source",
             Column::Rating => "Rating (stars)",
             Column::Format => "Format",
             Column::Time => "Time",
@@ -78,6 +84,7 @@ impl Column {
         match self {
             Column::Number => 4,
             Column::Source => 3,
+            Column::SourceName => 15,
             Column::Rating => 11,
             Column::Format => 9,
             Column::Time => 5,
@@ -90,8 +97,8 @@ impl Column {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct QueueColumns {
-    /// Columns not shown, by name: "number", "source", "artist", "album", "rating", "format",
-    /// "time".
+    /// Columns not shown, by name: "number", "source" (the icon), "artist", "album",
+    /// "source-name", "rating", "format", "time".
     pub hidden: Vec<String>,
     /// Widths of the text columns, in characters. The last one shown takes whatever's left.
     pub title: u16,
@@ -208,6 +215,7 @@ pub fn layout(left: u16, right: u16, cols: &QueueColumns) -> (u16, Vec<Placed>) 
         }
         let (width, gap) = match column {
             Column::Source => (1, 2),
+            Column::SourceName => (13, 2),
             Column::Rating => (9, 2),
             Column::Format => (7, 2),
             Column::Time => (5, 0),
@@ -233,20 +241,23 @@ mod tests {
     #[test]
     fn columns_fill_the_row_and_the_last_text_column_takes_the_rest() {
         let cols = QueueColumns::default();
-        let (marker, placed) = layout(4, 115, &cols);
+        let (marker, placed) = layout(4, 130, &cols);
         assert_eq!(find(&placed, Column::Number).unwrap().x, 4);
         assert_eq!(marker, 8);
         let title = find(&placed, Column::Title).unwrap();
         assert_eq!(title.width, 30);
         let time = find(&placed, Column::Time).unwrap();
-        assert_eq!(time.x + time.width - 1, 115, "time ends at the right edge");
+        assert_eq!(time.x + time.width - 1, 130, "time ends at the right edge");
         let album = find(&placed, Column::Album).unwrap();
-        let rating = find(&placed, Column::Rating).unwrap();
+        let source = find(&placed, Column::SourceName).unwrap();
         assert_eq!(
             album.x + album.width + 2,
-            rating.x,
-            "album grew to meet rating"
+            source.x,
+            "album grew to meet the source"
         );
+        assert_eq!(source.width, "YouTube Music".len() as u16);
+        let rating = find(&placed, Column::Rating).unwrap();
+        assert_eq!(source.x + 15, rating.x);
         let format = find(&placed, Column::Format).unwrap();
         assert_eq!(rating.x + 11, format.x);
     }
@@ -279,9 +290,9 @@ mod tests {
     #[test]
     fn widening_a_column_moves_its_edge_exactly_and_the_last_one_gives_way() {
         let mut cols = QueueColumns::default();
-        let (_, before) = layout(4, 115, &cols);
+        let (_, before) = layout(4, 130, &cols);
         cols.set_width(Column::Title, 40);
-        let (_, after) = layout(4, 115, &cols);
+        let (_, after) = layout(4, 130, &cols);
         assert_eq!(find(&after, Column::Title).unwrap().width, 40);
         let artist = |p: &[Placed]| find(p, Column::Artist).unwrap();
         assert_eq!(artist(&after).x, artist(&before).x + 10);

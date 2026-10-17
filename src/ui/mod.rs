@@ -1135,6 +1135,10 @@ fn draw_queue(
                 // the highlight is. Only stars on screen take clicks, so a click on a blank one
                 // picks the row. Each star takes the space after it too, as a star can spill
                 // into it.
+                Column::SourceName => {
+                    let (_, color) = source_icon(track.source, t);
+                    put(buf, inner, p.x, ry, track.source.name(), faded(color));
+                }
                 Column::Rating => {
                     let stars = app.rating(track);
                     if stars > 0 || selected {

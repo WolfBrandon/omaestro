@@ -192,6 +192,7 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
 - `O` opens a playlist: saved ones, or your Spotify and YouTube Music playlists.
 - With the mouse: drag songs to reorder, and drag the `╎` marks in the heading row to resize
   columns. The list icon at the top left (or `C`) shows or hides columns.
+- The Source column says where each song comes from: Local, Spotify or YouTube Music.
 
 **In the browser:** typing goes into the search box. `Tab` moves between the box, the results
 and the songs. `Enter` or a double-click adds to the end of the queue; it never replaces the

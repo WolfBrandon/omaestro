@@ -3,6 +3,14 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.16 — 2026-10-17
+
+- **A Source column in the queue,** after Album: Local, Spotify or YouTube Music, in the
+  source's colour. It shows unless hidden in the columns menu (the list icon, or `C`), where
+  it's "Source"; the small icon by the title is still there too, as "Source icon".
+  - It takes 15 characters, so in a narrow window the title, artist and album columns
+    shrink a little to make room.
+
 ## 0.9.15 — 2026-10-17
 
 - **Search finds YouTube videos too.** YouTube Music was only asked for songs, so anything it
