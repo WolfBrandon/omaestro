@@ -1341,6 +1341,19 @@ impl Player {
             } if current(ticket) => {
                 self.status.preparing = None;
                 self.status.paused = state == "PAUSED_PLAYBACK";
+                // The speaker counts whole seconds, so the song is somewhere in the second it
+                // says. While playing, the running clock is kept if it's in that second, or
+                // moved to its nearer edge if not: the position doesn't jump back at every
+                // report, and it closes in on the real one (reports come every 0.9 s, so they
+                // land all through the second).
+                let running = self
+                    .anchor
+                    .map(|(pos, at)| pos + at.elapsed().as_secs_f64());
+                let position = match running {
+                    Some(clock) if state == "PLAYING" => clock.clamp(position, position + 0.99),
+                    _ if state == "PLAYING" => position + 0.5,
+                    _ => position,
+                };
                 self.status.position = position;
                 if duration > 0.0 {
                     self.status.duration = duration;
@@ -2076,6 +2089,42 @@ mod tests {
             player.status.last_error
         );
         assert_eq!(player.current_index(), Some(0));
+    }
+
+    /// Sonos says whole seconds; the position keeps running smoothly between its reports.
+    #[test]
+    fn sonos_whole_seconds_become_a_smooth_position() {
+        let tmp = TempDir::new("player-sonos-clock");
+        let (mut player, _rx) = silent(&tmp);
+        player.engine = Engine::Sonos;
+        let ticket = player.ticket;
+        let report = |p: &mut Player, state: &str, position: f64| {
+            p.sonos_event(sonos::Event::Status {
+                ticket,
+                state: state.into(),
+                position,
+                duration: 200.0,
+            })
+            .unwrap();
+            p.status.position
+        };
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        assert!(
+            near(report(&mut player, "PLAYING", 10.0), 10.5),
+            "mid-second"
+        );
+        // The running clock is inside the second said: kept, not snapped back.
+        player.anchor = Some((10.9, Instant::now()));
+        assert!(near(report(&mut player, "PLAYING", 10.0), 10.9));
+        // Behind the speaker: moved up to the start of its second.
+        player.anchor = Some((11.6, Instant::now()));
+        assert!(near(report(&mut player, "PLAYING", 12.0), 12.0));
+        // Ahead of it: back to the end of its second.
+        player.anchor = Some((13.5, Instant::now()));
+        assert!(near(report(&mut player, "PLAYING", 12.0), 12.99));
+        // Paused: as said, and the clock stops.
+        assert!(near(report(&mut player, "PAUSED_PLAYBACK", 12.0), 12.0));
+        assert_eq!(player.anchor, None);
     }
 
     /// A missing file is skipped, so a gap in the queue doesn't stop the music.

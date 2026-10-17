@@ -3,6 +3,24 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.18 — 2026-10-17
+
+- **A snappier visualizer.**
+  - The bars rise faster and drop away in about 0.2 s instead of half a second, so they
+    move with the beat instead of trailing it.
+  - The screen redraws 60 times a second while they show (it was about 25), the same rate
+    the sound is analysed.
+- **In step on Sonos.** The bars there come from a silent copy of the song decoded here, and
+  it drifted:
+  - The speaker gives its place in whole seconds, so the copy started up to a second
+    behind. It also ran about 0.2 s ahead of its own start, and was restarted often, which
+    emptied the bars each time.
+  - Now the copy follows OMAESTRO's own clock for the song, sound by sound, and only
+    starts again after a jump of more than two seconds (a seek in the Sonos app, say).
+  - Between the speaker's reports, that clock keeps running smoothly instead of jumping
+    back to the whole second. It's within about a tenth of a second after a few seconds of
+    play.
+
 ## 0.9.17 — 2026-10-17
 
 - **Add by link.** `Ctrl+L`, or the new link button by the playlist's name (fourth of five),

@@ -403,8 +403,6 @@ fn event_loop(
     // in a row it died young.
     let mut vis_last_key = String::new();
     let mut vis_fails: u32 = 0;
-    // For a silent copy (Sonos): where in the song it started and when, to keep it in step.
-    let mut vis_clock: Option<(f64, Instant)> = None;
     loop {
         let now = (
             player.revision,
@@ -489,12 +487,15 @@ fn event_loop(
             }
             Some(target) => {
                 let key = format!("{target:?}");
-                let copy = matches!(target, visualizer::Target::File(_));
-                // A silent copy drifting from the speaker (a seek, a hiccup) starts again in step.
-                let drifted = copy
-                    && vis_clock.is_some_and(|(at, since)| {
-                        (at + since.elapsed().as_secs_f64() - player.status.position).abs() > 0.75
-                    });
+                // A silent copy (Sonos) follows the song's clock; one far from it (a seek
+                // elsewhere) starts again from where the song is.
+                if let Some((_, v)) = &vis {
+                    v.follow(player.status.position);
+                }
+                let drifted = vis
+                    .as_ref()
+                    .and_then(|(_, v)| v.copy_at())
+                    .is_some_and(|at| (at - player.status.position).abs() > 2.0);
                 let stale = match &vis {
                     Some((k, v)) => *k != key || !v.is_alive() || drifted,
                     None => true,
@@ -511,11 +512,9 @@ fn event_loop(
                     vis_fails = if died_young { vis_fails + 1 } else { 0 };
                     vis_last_key = key.clone();
                     vis_tried = Instant::now();
-                    let start = player.status.position;
-                    vis = visualizer::Visualizer::start(target, 32, start)
+                    vis = visualizer::Visualizer::start(target, 32, player.status.position)
                         .ok()
                         .map(|v| (key, v));
-                    vis_clock = copy.then(|| (start, Instant::now()));
                 }
                 if let Some((_, v)) = &vis {
                     app.bands = v.bands();
@@ -535,11 +534,12 @@ fn event_loop(
             terminal.draw(|frame| hits = ui::draw(frame, app, player, browse))?;
             dirty = std::mem::take(&mut app.cover_blink);
         }
-        // Wait for a key: briefly while the browser slides, otherwise up to 50 ms, so mpv's
-        // updates still show promptly.
-        let wait = if sliding {
+        // Wait for a key: briefly while the browser slides or the bars move (60 frames a
+        // second, as the analysis makes them), otherwise up to 50 ms, so mpv's updates still
+        // show promptly.
+        let wait = if sliding || vis.is_some() {
             16
-        } else if vis.is_some() || animated {
+        } else if animated {
             33
         } else {
             50

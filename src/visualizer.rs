@@ -7,8 +7,9 @@
 //! falls back to a microphone when that target isn't there; it just stops instead.
 //!
 //! On Sonos the sound never passes through this computer, so the bars come from a silent copy
-//! instead: ffmpeg decodes the same file at playing speed from where the speaker is, straight
-//! into the analysis. Nothing of it reaches any speaker.
+//! instead: ffmpeg decodes the same file from where the speaker is, straight into the
+//! analysis, which takes each moment of it when the song's clock (`follow`) gets there.
+//! Nothing of it reaches any speaker.
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::io::{self, Read};
@@ -26,8 +27,8 @@ const F_MAX: f32 = 16_000.0;
 const RANGE_DB: f32 = 45.0; // dB shown below the auto-gain ceiling
 const AGC_FALL_DB: f32 = 0.03; // ceiling drops ~1.8 dB/s after loud parts
 const AGC_FLOOR_DB: f32 = -50.0; // never amplify more than this (near-silence stays dark)
-const ATTACK: f32 = 0.5; // smoothing toward a higher value (per frame)
-const FALL: f32 = 0.08; // smoothing toward a lower value (per frame)
+const ATTACK: f32 = 0.7; // smoothing toward a higher value (per frame)
+const FALL: f32 = 0.2; // smoothing toward a lower value (per frame): ~0.2 s to drop away
 
 #[derive(Clone, Debug)]
 pub enum Target {
@@ -57,6 +58,12 @@ struct Shared {
     bands: Vec<f32>,
     updated: Instant,
     alive: bool,
+    /// A silent copy's clock: where the song is, as of when.
+    clock: (f64, Instant),
+    /// A silent copy: where in the song the newest sound analysed is.
+    copy_at: Option<f64>,
+    /// Set when the visualizer goes, so a copy waiting for the clock stops waiting.
+    stop: bool,
 }
 
 pub struct Visualizer {
@@ -109,11 +116,11 @@ fn spawn_pw_record(target: &Target) -> io::Result<Child> {
         .spawn()
 }
 
-/// Decodes `path` from `start` seconds in at playing speed (`-re`), as the same raw stereo
-/// 48 kHz samples pw-record gives, so the analysis can't tell the difference.
+/// Decodes `path` from `start` seconds in, as the same raw stereo 48 kHz samples pw-record
+/// gives. It's read as the song plays, so ffmpeg waits on the pipe (about 0.2 s ahead).
 fn spawn_ffmpeg(path: &Path, start: f64) -> io::Result<Child> {
     Command::new("ffmpeg")
-        .args(["-v", "error", "-nostdin", "-re", "-ss"])
+        .args(["-v", "error", "-nostdin", "-ss"])
         .arg(format!("{:.2}", start.max(0.0)))
         .arg("-i")
         .arg(path)
@@ -132,13 +139,18 @@ impl Visualizer {
             _ => spawn_pw_record(&target)?,
         };
         let stdout = child.stdout.take().expect("piped stdout");
+        let copy = matches!(target, Target::File(_));
         let shared = Arc::new(Mutex::new(Shared {
             bands: vec![0.0; n_bands],
             updated: Instant::now(),
             alive: true,
+            clock: (start, Instant::now()),
+            copy_at: copy.then_some(start),
+            stop: false,
         }));
         let sh = Arc::clone(&shared);
-        let thread = thread::spawn(move || reader_loop(stdout, sh, n_bands));
+        let paced = copy.then_some(start);
+        let thread = thread::spawn(move || reader_loop(stdout, sh, n_bands, paced));
         Ok(Visualizer {
             child,
             shared,
@@ -163,10 +175,21 @@ impl Visualizer {
     pub fn is_alive(&self) -> bool {
         self.shared.lock().unwrap().alive
     }
+
+    /// For a silent copy: where the song is now, so its sound is analysed in step with it.
+    pub fn follow(&self, position: f64) {
+        self.shared.lock().unwrap().clock = (position, Instant::now());
+    }
+
+    /// For a silent copy: where in the song the newest sound analysed is.
+    pub fn copy_at(&self) -> Option<f64> {
+        self.shared.lock().unwrap().copy_at
+    }
 }
 
 impl Drop for Visualizer {
     fn drop(&mut self) {
+        self.shared.lock().unwrap().stop = true;
         let _ = self.child.kill();
         let _ = self.child.wait(); // reap, no zombie
         if let Some(t) = self.thread.take() {
@@ -175,11 +198,39 @@ impl Drop for Visualizer {
     }
 }
 
-fn reader_loop(mut stdout: ChildStdout, shared: Arc<Mutex<Shared>>, n_bands: usize) {
+/// Reads the sound and analyses it. A silent copy (`paced`: where it starts in the song)
+/// comes faster than it plays, so each piece waits for the song's clock to get there; one
+/// that's behind (just started) is caught up at once.
+fn reader_loop(
+    mut stdout: ChildStdout,
+    shared: Arc<Mutex<Shared>>,
+    n_bands: usize,
+    paced: Option<f64>,
+) {
     let mut an = Analyzer::new(n_bands);
     let mut buf = vec![0u8; HOP * 2 * 4]; // HOP stereo f32 frames
     let mut ring = vec![0f32; FFT_SIZE]; // last FFT_SIZE mono samples
+    let mut frames: u64 = 0;
     while stdout.read_exact(&mut buf).is_ok() {
+        if let Some(start) = paced {
+            frames += HOP as u64;
+            let at = start + frames as f64 / RATE as f64;
+            loop {
+                let ((pos, since), stop) = {
+                    let s = shared.lock().unwrap();
+                    (s.clock, s.stop)
+                };
+                if stop {
+                    return;
+                }
+                let ahead = at - (pos + since.elapsed().as_secs_f64());
+                if ahead <= 0.0 {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_secs_f64(ahead.min(0.05)));
+            }
+            shared.lock().unwrap().copy_at = Some(at);
+        }
         ring.copy_within(HOP.., 0);
         let tail = &mut ring[FFT_SIZE - HOP..];
         for (dst, fr) in tail.iter_mut().zip(buf.as_chunks::<8>().0) {
@@ -341,5 +392,43 @@ mod tests {
             hz(hi)
         );
         assert!(vis.is_alive());
+    }
+
+    /// A silent copy is analysed in step with the song's clock, never ahead of it, and catches
+    /// up at once when the clock jumps on.
+    #[test]
+    fn a_silent_copy_keeps_to_the_song_clock() {
+        if !have("ffmpeg") {
+            eprintln!("skipping: needs ffmpeg");
+            return;
+        }
+        let tmp = TempDir::new("vis-clock");
+        let tone = tmp.0.join("tone.flac");
+        let ok = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("sine=frequency=440:duration=10")
+            .arg(&tone)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let vis = Visualizer::start(Target::File(tone), 24, 1.0).unwrap();
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(500));
+        let song = 1.0 + started.elapsed().as_secs_f64();
+        let at = vis.copy_at().unwrap();
+        assert!(at <= song + 0.001 && at > song - 0.1, "{at} vs {song}");
+        vis.follow(6.0);
+        let jumped = Instant::now();
+        std::thread::sleep(Duration::from_millis(300));
+        let song = 6.0 + jumped.elapsed().as_secs_f64();
+        let at = vis.copy_at().unwrap();
+        assert!(at <= song + 0.001 && at > song - 0.1, "{at} vs {song}");
+        // Back to the start: the copy waits for the clock, and still stops at once.
+        vis.follow(0.0);
+        std::thread::sleep(Duration::from_millis(100));
+        let dropped = Instant::now();
+        drop(vis);
+        assert!(dropped.elapsed() < Duration::from_millis(500));
     }
 }

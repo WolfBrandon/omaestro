@@ -19,6 +19,7 @@ In the order they'll be built:
 - [x] **YouTube videos in Search**: covers and uploads that are only videos (0.9.15).
 - [x] **Source column**: Local, Spotify or YouTube Music, in words (0.9.16).
 - [x] **Add by link**: a Spotify or YouTube song's link, into the queue (0.9.17).
+- [x] **Snappier visualizer**: quicker bars, 60 frames a second, in step on Sonos (0.9.18).
 - [ ] **Sort by popularity**: an artist's songs, most popular first.
 - [ ] **Output rate**: each file at its own sample rate, instead of resampling.
 - [ ] **Taskbar companion for Omarchy**: what's playing and where, in the bar.
