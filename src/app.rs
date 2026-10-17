@@ -9,6 +9,7 @@ use crate::connect::{self, LastFmStep, ListenBrainzStep, SpotifyStep, YouTubeSte
 use crate::integrations::Service;
 use crate::library::scan::{Progress, Summary};
 use crate::library::{Db, Source, Track};
+use crate::link::{self, AddLink};
 use crate::player::{AudioDevice, Named, Output};
 use crate::playlist::{self, Saved};
 use crate::search::{self, Found, Search};
@@ -152,6 +153,8 @@ pub enum News {
         source: Source,
         result: Result<Vec<Track>, String>,
     },
+    /// The song an Add by link was for.
+    Linked(Result<Vec<Track>, String>),
 }
 
 /// Player details the input handling needs.
@@ -282,6 +285,8 @@ pub enum Overlay {
     Settings(Settings),
     Spotify(SpotifyStep),
     YouTube(YouTubeStep),
+    /// Add by link: a Spotify or YouTube song's address.
+    AddLink(AddLink),
 }
 
 /// Something on screen that reacts to the mouse. The screen code lists where each one is on
@@ -301,12 +306,13 @@ pub enum Target {
     Output,
     Settings,
     Help,
-    /// The queue header's New, Save, Open and Clear buttons.
+    /// The queue header's New, Save, Open, Add by link and Clear buttons.
     New,
     Save,
     /// The playlist's name in the queue's header: click to rename.
     PlaylistName,
     Open,
+    AddLink,
     Clear,
     /// A queue row.
     Queue(usize),
@@ -966,6 +972,52 @@ impl App {
                 result,
             });
         });
+    }
+
+    /// The Add by link box, with `input` in it.
+    fn open_add_link(&mut self, input: String) {
+        self.overlay = Some(Overlay::AddLink(AddLink {
+            input,
+            ..AddLink::default()
+        }));
+    }
+
+    /// Looks up the song a link is for, in the background; it's added when it's found.
+    fn look_up(&mut self, found: link::Link) {
+        let Some(Overlay::AddLink(add)) = &mut self.overlay else {
+            return;
+        };
+        add.error = None;
+        let news = self.news.clone();
+        match found.source {
+            Source::Spotify => {
+                let Some(spotify) = self.spotify.clone() else {
+                    add.error = Some("Connect Spotify in Settings to add its songs".into());
+                    return;
+                };
+                add.busy = true;
+                std::thread::spawn(move || {
+                    let result =
+                        spotify
+                            .lock()
+                            .map_err(|_| "busy".to_string())
+                            .and_then(|mut s| {
+                                s.song(&found.id)
+                                    .map(|t| vec![t])
+                                    .map_err(|e| format!("{e:#}"))
+                            });
+                    let _ = news.send(News::Linked(result));
+                });
+            }
+            _ => {
+                add.busy = true;
+                let youtube = self.youtube.clone();
+                std::thread::spawn(move || {
+                    let result = with_youtube(&youtube, |c| c.song(&found.id)).map(|t| vec![t]);
+                    let _ = news.send(News::Linked(result));
+                });
+            }
+        }
     }
 
     /// Save to the playlist the queue belongs to, or ask for a name.
@@ -1774,6 +1826,23 @@ impl App {
                 Ok(_) => self.status = format!("{name} has no songs OMAESTRO can play"),
                 Err(e) => self.status = format!("Couldn't load {name}: {e}"),
             },
+            // Unless the box was closed meanwhile.
+            News::Linked(result) => {
+                if let Some(Overlay::AddLink(add)) = &mut self.overlay
+                    && add.busy
+                {
+                    match result {
+                        Ok(tracks) => {
+                            self.overlay = None;
+                            return Ok(Some(Action::Enqueue(tracks)));
+                        }
+                        Err(e) => {
+                            add.busy = false;
+                            add.error = Some(e);
+                        }
+                    }
+                }
+            }
         }
         Ok(None)
     }
@@ -1786,6 +1855,10 @@ impl App {
             Some(Overlay::LastFm(step)) => step.paste(&text),
             Some(Overlay::ListenBrainz(step)) => step.paste(&text),
             Some(Overlay::Rename { name, .. }) => name.push_str(text.trim()),
+            Some(Overlay::AddLink(add)) if !add.busy => {
+                add.input.push_str(text.trim());
+                add.error = None;
+            }
             Some(Overlay::Settings(_)) => {
                 let rows = settings::rows(&self.config, &self.facts());
                 if let Some(Overlay::Settings(s)) = &mut self.overlay {
@@ -1802,6 +1875,8 @@ impl App {
                 self.browse.query.push_str(&text);
                 self.browse.refresh(&self.catalog, &self.db)?;
             }
+            // A song's link pasted into the queue: ready to add.
+            None if link::parse(&text).is_ok() => self.open_add_link(text.trim().to_string()),
             _ => {}
         }
         Ok(())
@@ -1820,6 +1895,11 @@ impl App {
                 // Ctrl+N: a new playlist, from the queue (not n, which plays the next song).
                 KeyCode::Char('n') if self.overlay.is_none() && !self.browse_open => {
                     return Ok(Some(Action::NewPlaylist));
+                }
+                // Ctrl+L: add a song by its link.
+                KeyCode::Char('l') if self.overlay.is_none() => {
+                    self.open_add_link(String::new());
+                    return Ok(None);
                 }
                 _ => {}
             }
@@ -2203,6 +2283,19 @@ impl App {
                     _ => {}
                 }
             }
+            Overlay::AddLink(add) => match key.code {
+                KeyCode::Esc => self.overlay = None,
+                _ if add.busy => {}
+                KeyCode::Enter => match link::parse(&add.input) {
+                    Ok(found) => self.look_up(found),
+                    Err(e) => add.error = Some(e),
+                },
+                _ => {
+                    if connect::edit(&mut add.input, key) {
+                        add.error = None;
+                    }
+                }
+            },
             Overlay::Rename { name, then_save } => match key.code {
                 KeyCode::Esc => self.overlay = None,
                 KeyCode::Enter if !name.trim().is_empty() => {
@@ -2435,6 +2528,10 @@ impl App {
                 None
             }
             Target::New => Some(Action::NewPlaylist),
+            Target::AddLink => {
+                self.open_add_link(String::new());
+                None
+            }
             Target::Clear => Some(Action::Clear),
             Target::ColumnsMenu => {
                 self.overlay = Some(Overlay::Columns(0));
@@ -3509,6 +3606,87 @@ pub mod tests {
             Some(Overlay::FileInfo(info)) => assert_eq!(info.played, (2, Some(500))),
             _ => panic!("File Info"),
         }
+    }
+
+    /// Ctrl+L, the button or pasting a link opens the box; the song found is added. No
+    /// network: YouTube links are never sent, and Spotify isn't connected here.
+    #[test]
+    fn a_song_is_added_by_its_link() {
+        let tmp = TempDir::new("app-link");
+        let mut app = app(&tmp);
+        let ctx = Ctx {
+            queue: &[],
+            devices: &[],
+            output: &crate::player::Output::Here(String::new()),
+            playlist: None,
+            revision: 0,
+        };
+        let ctrl_l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+        app.on_key(ctrl_l, &ctx).unwrap();
+        let add = |app: &App| match &app.overlay {
+            Some(Overlay::AddLink(add)) => add.clone(),
+            _ => panic!("the Add by link box isn't open"),
+        };
+        assert_eq!(add(&app), AddLink::default());
+        // Not a link: said at once.
+        for c in "hello".chars() {
+            press(&mut app, KeyCode::Char(c), &ctx);
+        }
+        press(&mut app, KeyCode::Enter, &ctx);
+        assert!(add(&app).error.is_some());
+        // Typing again clears it; a Spotify song needs Spotify connected.
+        app.on_key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(add(&app).error, None);
+        app.on_paste("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")
+            .unwrap();
+        press(&mut app, KeyCode::Enter, &ctx);
+        let now = add(&app);
+        assert!(!now.busy && now.error.unwrap().contains("Connect Spotify"));
+        press(&mut app, KeyCode::Esc, &ctx);
+        assert!(app.overlay.is_none());
+
+        // A link pasted into the queue opens the box with it; other text doesn't.
+        app.on_paste("just words").unwrap();
+        assert!(app.overlay.is_none());
+        app.on_paste(" https://youtu.be/J3S6dppNOcU\n").unwrap();
+        assert_eq!(add(&app).input, "https://youtu.be/J3S6dppNOcU");
+
+        // What the look-up says (as if it had run): a failure shows in the box, a song is added.
+        if let Some(Overlay::AddLink(add)) = &mut app.overlay {
+            add.busy = true;
+        }
+        let none = app
+            .on_news(News::Linked(Err("YouTube has nothing at that link".into())))
+            .unwrap();
+        assert!(none.is_none());
+        assert_eq!(
+            add(&app).error.as_deref(),
+            Some("YouTube has nothing at that link")
+        );
+        if let Some(Overlay::AddLink(add)) = &mut app.overlay {
+            add.busy = true;
+        }
+        let song = Track {
+            source: Source::YouTube,
+            uri: "J3S6dppNOcU".into(),
+            title: "Lithium by Nirvana (Morgan James Cover)".into(),
+            ..Track::default()
+        };
+        match app.on_news(News::Linked(Ok(vec![song.clone()]))).unwrap() {
+            Some(Action::Enqueue(tracks)) => assert_eq!(tracks, vec![song.clone()]),
+            other => panic!("{other:?}"),
+        }
+        assert!(app.overlay.is_none());
+        // Closed before it came back: nothing is added.
+        assert!(app.on_news(News::Linked(Ok(vec![song]))).unwrap().is_none());
+
+        // The link button in the queue's header opens it too.
+        assert!(app.click(Target::AddLink, false, &ctx).unwrap().is_none());
+        assert!(matches!(app.overlay, Some(Overlay::AddLink(_))));
     }
 
     #[test]

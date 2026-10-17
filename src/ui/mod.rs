@@ -51,6 +51,7 @@ const I_LIST: &str = "\u{f03a}";
 const I_NEW: &str = "\u{f016}";
 const I_SAVE: &str = "\u{f0c7}";
 const I_OPEN: &str = "\u{f07c}";
+const I_LINK: &str = "\u{f0c1}";
 const I_CLEAR: &str = "\u{f1f8}";
 const I_STAR: &str = "\u{f005}";
 const I_STAR_O: &str = "\u{f006}";
@@ -266,6 +267,7 @@ pub fn draw(frame: &mut Frame, app: &App, player: &Player, browse: f32) -> Vec<H
         }
         Some(Overlay::Spotify(step)) => screens::draw_spotify(buf, area, step, t, &mut hit),
         Some(Overlay::YouTube(step)) => screens::draw_youtube(buf, area, step, t, &mut hit),
+        Some(Overlay::AddLink(add)) => screens::draw_add_link(buf, area, add, t, &mut hit),
         None => {}
     }
     hits
@@ -990,6 +992,7 @@ fn draw_queue(
             (I_NEW, Target::New),
             (I_SAVE, Target::Save),
             (I_OPEN, Target::Open),
+            (I_LINK, Target::AddLink),
             (I_CLEAR, Target::Clear),
         ] {
             if x + width(icon) + 4 > room {
@@ -1236,6 +1239,7 @@ fn draw_hints(buf: &mut Buffer, r: Rect, app: &App, t: &Theme) {
             ("^Z", "undo"),
             ("s", "save"),
             ("O", "open"),
+            ("^L", "add link"),
             // The rest fall off the end first on a narrow screen, so all keys comes early.
             ("?", "all keys"),
             ("␣", "pause"),
@@ -1500,6 +1504,7 @@ fn draw_help(buf: &mut Buffer, screen: Rect, t: &Theme, hit: &mut impl FnMut(Rec
         ("1-5  0", "Rate it (or them), or click a star; 0 unrates"),
         ("^Z  ^Y", "Undo, redo the last change (anywhere)"),
         ("^N", "Start a new playlist (saves the named one first)"),
+        ("^L", "Add a song by its Spotify or YouTube link"),
         ("c", "Clear the queue"),
         ("s  S", "Save the playlist; rename it (or click its name)"),
         ("O", "Open a playlist (saved, Spotify, YouTube Music)"),
@@ -1966,6 +1971,10 @@ mod tests {
                 ))
             }
             "open" => keys(&mut app, "O"),
+            // Add by link, with a link pasted in.
+            "link" => app
+                .on_paste("https://music.youtube.com/watch?v=J3S6dppNOcU&si=x")
+                .unwrap(),
             // The queue; "picked" with three songs selected.
             "queue" | "picked" => {
                 keys(&mut app, "bblack keys");

@@ -11,6 +11,7 @@ mod desktop;
 mod fileinfo;
 mod integrations;
 mod library;
+mod link;
 mod player;
 mod playlist;
 mod plays;

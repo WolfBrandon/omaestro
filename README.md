@@ -190,6 +190,11 @@ The web addresses on the sign-in screens can be clicked, and each has a Copy but
   empties and becomes Untitled. `Ctrl+Z` brings it back. (`c` only empties the queue: it's
   still that playlist, so `s` would save over it.)
 - `O` opens a playlist: saved ones, or your Spotify and YouTube Music playlists.
+- **Add by link:** `Ctrl+L`, or the link button by the playlist's name, opens a box for a
+  Spotify or YouTube song's link (`open.spotify.com/track/…`, `youtube.com/watch?v=…`,
+  `music.youtube.com/…`, `youtu.be/…`). `Enter` adds the song to the end of the queue.
+  Pasting a link (`Ctrl+Shift+V`) while the queue is showing opens the box with it already
+  in. Spotify songs need Spotify connected; YouTube ones don't.
 - With the mouse: drag songs to reorder, and drag the `╎` marks in the heading row to resize
   columns. The list icon at the top left (or `C`) shows or hides columns.
 - The Source column says where each song comes from: Local, Spotify or YouTube Music.

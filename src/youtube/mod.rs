@@ -464,6 +464,13 @@ impl Client {
         Ok(best_first(query, search_songs(&songs?), videos))
     }
 
+    /// One song or video by its id, for Add by link: it's first in its own "up next" list.
+    pub fn song(&self, video_id: &str) -> Result<Track> {
+        check_id(video_id)?;
+        let body = self.post("next", json!({"videoId": video_id, "isAudioOnly": true}))?;
+        next_song(&body, video_id).context("YouTube has nothing at that link")
+    }
+
     /// "Connected as …".
     pub fn account_name(&mut self) -> Result<String> {
         let body = self.post("account/account_menu", json!({}))?;
@@ -683,6 +690,43 @@ fn best_first(query: &str, songs: Vec<Track>, videos: Vec<Track>) -> Vec<Track> 
     full
 }
 
+/// The song `video_id` from an "up next" reply.
+fn next_song(body: &Value, video_id: &str) -> Option<Track> {
+    fn find<'a>(v: &'a Value, id: &str) -> Option<&'a Value> {
+        match v {
+            Value::Object(map) => map
+                .get("playlistPanelVideoRenderer")
+                .filter(|it| it["videoId"].as_str() == Some(id))
+                .or_else(|| map.values().find_map(|x| find(x, id))),
+            Value::Array(items) => items.iter().find_map(|x| find(x, id)),
+            _ => None,
+        }
+    }
+    let it = find(body, video_id)?;
+    let mut t = Track {
+        source: Source::YouTube,
+        uri: video_id.to_string(),
+        title: at(it, "title.runs.0.text").as_str()?.to_string(),
+        art_url: list(at(it, "thumbnail.thumbnails"))
+            .filter_map(|t| t["url"].as_str())
+            .last()
+            .unwrap_or_default()
+            .to_string(),
+        ..Track::default()
+    };
+    read_runs(
+        &list(at(it, "longBylineText.runs")).collect::<Vec<_>>(),
+        &mut t,
+    );
+    if let Some(ms) = at(it, "lengthText.runs.0.text")
+        .as_str()
+        .and_then(duration_ms)
+    {
+        t.duration_ms = ms;
+    }
+    Some(t)
+}
+
 /// A song row from a playlist page.
 fn playlist_track(it: &Value) -> Option<Track> {
     let id = at(it, "playlistItemData.videoId").as_str()?;
@@ -856,6 +900,28 @@ mod tests {
     }
 
     #[test]
+    fn reads_a_song_from_its_up_next_list() {
+        // A trimmed copy of a live, signed-out "next" reply for a video (2026-10-17).
+        let body: Value = serde_json::from_str(include_str!("test-next.json")).unwrap();
+        let t = next_song(&body, "J3S6dppNOcU").unwrap();
+        assert_eq!(
+            (t.title.as_str(), t.artist.as_str(), t.duration_ms),
+            (
+                "Lithium by Nirvana (Morgan James Cover)",
+                "Morgan James",
+                256_000
+            )
+        );
+        assert_eq!(t.source, Source::YouTube);
+        assert!(t.art_url.starts_with("https://i.ytimg.com/"));
+        assert_eq!(
+            next_song(&body, "AAAAAAAAAAA"),
+            None,
+            "only the song asked for"
+        );
+    }
+
+    #[test]
     fn lists_each_chromium_profile() {
         let state = r#"{"profile":{"info_cache":{
             "Profile 1":{"name":"Personal","user_name":"me@example.com"},
@@ -958,6 +1024,11 @@ mod tests {
             songs[0].uri, songs[0].title, songs[0].artist
         );
         assert_eq!(songs[0].uri, "J3S6dppNOcU");
+        // Add by link.
+        let t = client.song("J3S6dppNOcU").unwrap();
+        println!("{} | {} | {} ms", t.title, t.artist, t.duration_ms);
+        assert_eq!(t.artist, "Morgan James");
+        assert!(client.song("AAAAAAAAAAA").is_err());
     }
 
     #[test]

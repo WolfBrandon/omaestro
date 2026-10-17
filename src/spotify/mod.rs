@@ -164,6 +164,12 @@ impl Spotify {
         Ok(items(&body["tracks"]["items"]).filter_map(track).collect())
     }
 
+    /// One song by its id, for Add by link.
+    pub fn song(&mut self, id: &str) -> Result<Track> {
+        let body = self.get(&format!("/tracks/{id}"))?;
+        track(&body).context("Spotify has no song at that link")
+    }
+
     /// Your playlists, the ones you made and the ones you follow.
     pub fn playlists(&mut self) -> Result<Vec<Playlist>> {
         let mut out = Vec::new();

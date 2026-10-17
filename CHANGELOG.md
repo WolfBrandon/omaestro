@@ -3,6 +3,17 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.17 — 2026-10-17
+
+- **Add by link.** `Ctrl+L`, or the new link button by the playlist's name (fourth of five),
+  opens a box for a Spotify or YouTube song's link. `Enter` looks the song up and adds it to
+  the end of the queue; `Ctrl+Z` takes it back.
+  - Links it reads: `open.spotify.com/track/…` (and `spotify:track:…`), `youtube.com/watch?v=…`,
+    `music.youtube.com/watch?v=…`, `youtu.be/…` and `youtube.com/shorts/…`.
+  - Pasting a link (`Ctrl+Shift+V`) while the queue is showing opens the box with it in.
+  - A link to an album or playlist says so: it adds one song at a time.
+  - Spotify songs need Spotify connected (Settings); YouTube ones don't.
+
 ## 0.9.16 — 2026-10-17
 
 - **A Source column in the queue,** after Album: Local, Spotify or YouTube Music, in the

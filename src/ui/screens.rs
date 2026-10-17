@@ -1704,6 +1704,43 @@ pub(super) fn draw_open(
     hints(buf, inner, cx, inner.bottom().saturating_sub(1), &pairs, t);
 }
 
+/// Add by link: a box for a Spotify or YouTube song's address.
+pub(super) fn draw_add_link(
+    buf: &mut Buffer,
+    screen: Rect,
+    add: &crate::link::AddLink,
+    t: &Theme,
+    hit: &mut impl FnMut(Rect, Target),
+) {
+    let inner = popup(buf, centred(screen, 72, 11), "ADD BY LINK", t, hit);
+    let x = inner.x + 2;
+    let y = paragraph(
+        buf,
+        inner,
+        x,
+        inner.y + 1,
+        "Paste a link to a song on Spotify or YouTube (Ctrl+Shift+V) and press Enter. It's added to the end of the queue.",
+        fg(t.light),
+    );
+    field(
+        buf,
+        Rect::new(x, y + 1, inner.width.saturating_sub(4), 1),
+        &add.input,
+        !add.busy,
+        t,
+    );
+    let pairs: &[(&str, &str)] = if add.busy {
+        put(buf, inner, x, y + 3, "Looking it up…", fg(t.dim));
+        &[("Esc", "cancel")]
+    } else {
+        if let Some(e) = &add.error {
+            paragraph(buf, inner, x, y + 3, e, fg(t.red));
+        }
+        &[("⏎", "add"), ("Esc", "cancel")]
+    };
+    hints(buf, inner, x, inner.bottom().saturating_sub(1), pairs, t);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
