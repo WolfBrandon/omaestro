@@ -26,6 +26,10 @@ const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
                           Chrome/141.0.0.0 Safari/537.36";
 /// Search filter: songs only.
 const SONGS: &str = "EgWKAQIIAWoMEA4QChADEAQQCRAF";
+/// Search filter: videos only. Covers, live versions and uploads are often only videos.
+const VIDEOS: &str = "EgWKAQIQAWoMEA4QChADEAQQCRAF";
+/// How many videos a search adds after the songs.
+const VIDEOS_SHOWN: usize = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Account {
@@ -445,10 +449,19 @@ impl Client {
         }
     }
 
-    /// Songs matching the words, best first.
+    /// Songs matching the words, then videos (asked for at the same time), best first.
     pub fn search(&self, query: &str) -> Result<Vec<Track>> {
-        let body = self.post("search", json!({"query": query, "params": SONGS}))?;
-        Ok(search_songs(&body))
+        let (songs, videos) = std::thread::scope(|s| {
+            let videos = s.spawn(|| self.post("search", json!({"query": query, "params": VIDEOS})));
+            let songs = self.post("search", json!({"query": query, "params": SONGS}));
+            (songs, videos.join())
+        });
+        // Songs are what matters; videos only if they came.
+        let videos = match videos {
+            Ok(Ok(body)) => search_songs(&body),
+            _ => Vec::new(),
+        };
+        Ok(best_first(query, search_songs(&songs?), videos))
     }
 
     /// "Connected as …".
@@ -599,6 +612,10 @@ fn read_runs(runs: &[&Value], t: &mut Track) {
                 t.year = text.parse().ok()
             }
             None if matches!(text, "Song" | "Video" | "Album" | "Single" | "EP") => {}
+            // A video's "653K views" or "14K likes", a song's "180K plays".
+            None if [" views", " likes", " plays"]
+                .iter()
+                .any(|s| text.ends_with(s)) => {}
             None => artists.push(text),
         }
     }
@@ -639,6 +656,31 @@ fn search_songs(body: &Value) -> Vec<Track> {
             Some(t)
         })
         .collect()
+}
+
+/// Songs, then the first few videos not among them. Those with every word typed in their
+/// title or artist go first, so a video's exact title finds it above songs that only share a
+/// word with it.
+fn best_first(query: &str, songs: Vec<Track>, videos: Vec<Track>) -> Vec<Track> {
+    let words = |s: &str| -> Vec<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let wanted = words(query);
+    let mut all = songs;
+    for v in videos.into_iter().take(VIDEOS_SHOWN) {
+        if !all.iter().any(|t| t.uri == v.uri) {
+            all.push(v);
+        }
+    }
+    let (mut full, rest): (Vec<Track>, Vec<Track>) = all.into_iter().partition(|t| {
+        let have = words(&format!("{} {}", t.title, t.artist));
+        wanted.iter().all(|w| have.contains(w))
+    });
+    full.extend(rest);
+    full
 }
 
 /// A song row from a playlist page.
@@ -771,6 +813,49 @@ mod tests {
     }
 
     #[test]
+    fn finds_videos_and_puts_an_exact_title_first() {
+        // A trimmed copy of a live, signed-out video search for a cover that YouTube Music
+        // only has as a video (2026-10-17).
+        let body: Value = serde_json::from_str(include_str!("test-search-videos.json")).unwrap();
+        let videos = search_songs(&body);
+        let cover = &videos[0];
+        assert_eq!(
+            (
+                cover.uri.as_str(),
+                cover.title.as_str(),
+                cover.artist.as_str()
+            ),
+            (
+                "J3S6dppNOcU",
+                "Lithium by Nirvana (Morgan James Cover)",
+                "Morgan James"
+            ),
+            "\"653K views\" isn't an artist"
+        );
+        assert_eq!(cover.duration_ms, 256_000);
+        let songs =
+            search_songs(&serde_json::from_str(include_str!("test-search-songs.json")).unwrap());
+        let first_song = songs[0].clone();
+        let both = best_first(
+            "Lithium by Nirvana (Morgan James Cover)",
+            songs.clone(),
+            videos.clone(),
+        );
+        assert_eq!(both[0].uri, "J3S6dppNOcU", "the exact title goes first");
+        assert_eq!(both.len(), songs.len() + videos.len());
+        // Songs keep their place when the words fit them as well as a video.
+        let both = best_first("black keys", songs.clone(), videos.clone());
+        assert_eq!(both[0], first_song);
+        assert_eq!(
+            both.last().map(|t| t.uri.as_str()),
+            Some(videos[2].uri.as_str())
+        );
+        // A video that's also a song isn't listed twice.
+        let again = best_first("x", songs.clone(), vec![first_song]);
+        assert_eq!(again.len(), songs.len());
+    }
+
+    #[test]
     fn lists_each_chromium_profile() {
         let state = r#"{"profile":{"info_cache":{
             "Profile 1":{"name":"Personal","user_name":"me@example.com"},
@@ -864,6 +949,15 @@ mod tests {
             );
         }
         assert!(songs.iter().any(|t| t.title.contains("Tighten Up")));
+        // Only a video on YouTube Music.
+        let songs = client
+            .search("Lithium by Nirvana (Morgan James Cover)")
+            .unwrap();
+        println!(
+            "{} | {} | {}",
+            songs[0].uri, songs[0].title, songs[0].artist
+        );
+        assert_eq!(songs[0].uri, "J3S6dppNOcU");
     }
 
     #[test]

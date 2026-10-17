@@ -3,6 +3,15 @@
 Versions are Release.Version.Fix: the middle number goes up for new features, the last for
 fixes only. The first moves when a release is called.
 
+## 0.9.15 — 2026-10-17
+
+- **Search finds YouTube videos too.** YouTube Music was only asked for songs, so anything it
+  has only as a video (many covers, live versions and uploads) never came up, even searched
+  by its exact title. Now its songs and up to ten videos are asked for together.
+  - A result with every word typed in its title or artist goes first, so an exact title
+    is at the top.
+  - A video's view and like counts are no longer taken for part of the artist's name.
+
 ## 0.9.14 — 2026-10-15
 
 - **Select several in the browser and Search,** to add them to the queue together.

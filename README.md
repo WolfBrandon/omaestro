@@ -199,7 +199,9 @@ queue.
 
 **In Search:** each provider's results get their own box, and `Tab` jumps between them.
 `Enter` plays a song now (the queue carries on after it), `a` adds it, `A` adds everything that
-provider found.
+provider found. YouTube Music finds its songs and then up to ten videos, since covers, live
+versions and uploads are often only videos there; a result with every word you typed in its
+title or artist comes first.
 
 **Several at once, in the browser and Search:** as in the queue, `Shift+↑`/`↓` (or
 `Shift+Home`/`End`) selects, `Ctrl+A` selects the whole list, `Ctrl+click` adds or drops one
